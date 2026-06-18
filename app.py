@@ -174,14 +174,14 @@ def xrows(p):
     wb.close(); return hdr,rs
 
 # ───────────────── 报表导入 (港 import_seller_sprite) ─────────────────
-def classify_report(bn,self_asin):
+def classify_report(bn,self_asin,lin):
     if bn.startswith("ReverseASIN-"): return "self" if self_asin in bn else "comp"
     if bn.startswith("KeywordMining-"): return "mining"
     if bn.startswith("ABAKeywordTrend-"): return "aba"
     if bn.startswith("FUNLAB-") or bn.startswith("Fanlepu-"): return "sp_ss"
     if bn.startswith("BusinessReport"): return "biz"
     if "Search_term_report" in bn: return "sp_amz"
-    return "sp_amz"  # lin 模式: 余下=亚马逊原生; (新建产品报表多为林明坚式)
+    return "sp_amz" if lin else "self"  # 标准布局: 余下(根xlsx)=自家反查; 林明坚式: =亚马逊原生广告报表
 def import_keywords(files,site,asin):
     merged={}
     def get(kw):
@@ -443,7 +443,7 @@ def process(rid):
         xls=[x for x in xls if "~$" not in os.path.basename(x)]
         files={"self":[],"comp":[],"mining":[],"aba":[],"sp_amz":[],"sp_ss":[],"biz":[]}
         for x in xls:
-            c=classify_report(os.path.basename(x),asin); files.setdefault(c,[]).append(x)
+            c=classify_report(os.path.basename(x),asin,lin); files.setdefault(c,[]).append(x)
         log.append(f"报表 {len(xls)} 文件: self{len(files['self'])} comp{len(files['comp'])} mining{len(files['mining'])} aba{len(files['aba'])} sp_amz{len(files['sp_amz'])} sp_ss{len(files['sp_ss'])}")
         # 2. App
         if reuse:
