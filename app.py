@@ -39,7 +39,7 @@ def lall(app,tb):
     while True:
         u=BASE+f"/bitable/v1/apps/{app}/tables/{tb}/records?page_size=500"+(("&page_token="+pt) if pt else "")
         d=json.load(urllib.request.urlopen(urllib.request.Request(u,headers={"Authorization":"Bearer "+tok()}),timeout=60))["data"]
-        out+=d.get("items",[])
+        out+=(d.get("items") or [])
         if d.get("has_more"): pt=d["page_token"]
         else: break
     return out
