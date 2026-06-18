@@ -13,11 +13,14 @@ REG_APP=os.environ.get("WANCI_REG_APP","W8LPboJSMaVqlwsizQ8cPVDIn2c")
 REG_TB=os.environ.get("WANCI_REG_TB","tbl2g78DcPnxWNwO")
 APPLY_TB=os.environ.get("WANCI_APPLY_TB","tblPXS4uO8lK9p5g")
 RANK_BASE=os.environ.get("WANCI_RANK_BASE","EEKNbZ8b8aqv6msOaTscotBDn5f")
+SNAP_TB=os.environ.get("WANCI_SNAP_TB","tbl3OipVxS8wyjKk")  # 万词周快照表(总台App内)
 AUTH_TOKEN=os.environ.get("ONBOARD_TOKEN","")
+FRANKIE_OID="ou_629ce01f4bc31de078e10fcb038dbf78"
 BASE="https://open.feishu.cn/open-apis"
-OP_OID={  # 负责运营 → 聪哥1号 open_id (路由HTML)
+OP_OID={  # 负责运营 → 聪哥1号 open_id (路由HTML/卡片)
  "陈翔宇":"ou_9c322382284a7a6672a091b9f4c0a551","林明坚":"ou_35aa6883c0598bac5c7e06fcb06f7c4d",
- "余培霓":"ou_40ff10b05fc358f88c5674f053665551","潘志聪":"ou_629ce01f4bc31de078e10fcb038dbf78"}
+ "余培霓":"ou_40ff10b05fc358f88c5674f053665551","潘志聪":"ou_629ce01f4bc31de078e10fcb038dbf78",
+ "黄奕纯":"ou_1b981067ce8edfd82af7c70c109310e4"}
 
 # ───────────────── 飞书 / 领星 helpers ─────────────────
 _tok={"v":None,"t":0}
@@ -489,9 +492,145 @@ def process(rid):
         upd(REG_APP,APPLY_TB,rid,{"状态":"失败","处理结果":(" | ".join(log)+" | ERR "+str(e))[:900]})
         return {"ok":False,"err":str(e),"tb":tb,"log":log}
 
+# ───────────────── L3 每周复审 ─────────────────
+def compute_audit(L,rows,cat):
+    """rows = 表1 fields dict 列表(已按站点过滤)。返回审计指标 dict(给周快照+delta用)。"""
+    supp=supported_machines(L["title"]+" "+" ".join(L["bullets"])+" "+L["desc"])
+    tt=set(toks(L["title"])); bt=set()
+    for b in L["bullets"]: bt|=set(toks(b))
+    dt=set(toks(L["desc"])); st=set(toks(L["st"])); front=tt|bt|dt
+    def cov(kw,s): k=toks(kw); return bool(k) and all(w in s for w in k)
+    R=[]
+    for f in rows:
+        kw=ext(f.get("关键词"))
+        R.append({"kw":kw,"mx":f.get("矩阵"),"vol":float(ext(f.get("月搜索量")) or 0),"ord":float(ext(f.get("已出单单量")) or 0),
+                  "rank":float(ext(f.get("我方自然排名")) or 0),"front":cov(kw,front),"instr":cov(kw,st),"qual":qualify_embed(kw,cat,supp)})
+    total=len(R); embedded=sum(1 for r in R if r["front"] or r["instr"])
+    rk=[r for r in R if r["rank"]>0]; p1=[r for r in rk if r["rank"]<=16]; p23=[r for r in rk if 16<r["rank"]<=48]; deep=[r for r in rk if r["rank"]>48]
+    sens=lambda r: r["mx"] in ("IP词","品牌词-竞品") or is_ip(r["kw"]) or is_comp(r["kw"])
+    ugc=[r for r in R if sens(r)]; embeddable=[r for r in R if r["qual"] and not sens(r)]
+    miss=sorted([r for r in embeddable if not(r["front"] or r["instr"])],key=lambda r:-(r["vol"]+r["ord"]*5000))
+    be=len(L["bullets"])==0; de=not L["desc"].strip(); se=not L["st"].strip(); buy="BUYABLE" in (L["status"] or [])
+    notext=(not L["title"].strip()) and be and de and se
+    status="空listing" if notext else ("半成品" if (be or de or se or not buy) else "正常")
+    return {"total":total,"recorded":len(rk),"p1":len(p1),"p23":len(p23),"deep":len(deep),"embedded":embedded,
+            "cover_pct":round(100.0*embedded/max(total,1)),"fit":len(embeddable)+len(ugc),
+            "miss":[{"kw":r["kw"],"vol":r["vol"],"ord":r["ord"]} for r in miss[:5]],"status":status}
+
+def refresh_t2(app,t1,t2,L,cat,site):
+    """只刷表2(Listing埋词审计),保持与最新 listing 文案同步(摘自 fill_234 表2 段)。"""
+    supp=supported_machines(L["title"]+" "+" ".join(L["bullets"])+" "+L["desc"])
+    tt=set(toks(L["title"])); bt=set()
+    for b in L["bullets"]: bt|=set(toks(b))
+    dt=set(toks(L["desc"])); st=set(toks(L["st"])); front=tt|bt|dt
+    def cov(kw,s): k=toks(kw); return bool(k) and all(w in s for w in k)
+    rows=[r["fields"] for r in lall(app,t1) if r["fields"].get("站点")==site]
+    ensure_site(app,t2); clear(app,t2,lambda f:f.get("站点")==site)
+    t2r=[]
+    for f in rows:
+        kw=ext(f.get("关键词")); mx=f.get("矩阵")
+        if mx not in ("意图词","品牌词-平台","品牌词-竞品","IP词"): continue
+        inT=cov(kw,tt);inB=cov(kw,bt);inD=cov(kw,dt);inS=cov(kw,st);fr=cov(kw,front)
+        ch=("直写前台(标题/五点/描述/后台ST)" if mx=="意图词" else ("后台ST已埋(for形式)+UGC" if (mx=="品牌词-平台" and "nintendo" in kw.lower()) else ("直写前台(标题/五点/描述/后台ST)" if mx=="品牌词-平台" else ("UGC评论QA+广告可打" if mx=="品牌词-竞品" else "UGC评论QA"))))
+        if fr or inS: status="已埋" if fr else "已埋(ST)"
+        elif mx in ("意图词","品牌词-平台"): status="待埋(补描述)" if qualify_embed(kw,cat,supp) else "不埋"
+        else: status="UGC待引导"
+        t2r.append({"关键词":kw,"站点":site,"矩阵":mx,"埋词渠道":ch,"标题已埋":inT,"五点已埋":inB,"描述已埋":inD,"后台ST已埋":inS,"前台已覆盖":fr,"埋词状态":status})
+    return batch(app,t2,t2r)
+
+def im_card(oid,title,md,color="blue"):
+    card={"config":{"wide_screen_mode":True},"header":{"template":color,"title":{"tag":"plain_text","content":title}},
+          "elements":[{"tag":"div","text":{"tag":"lark_md","content":md}}]}
+    api("POST","/im/v1/messages?receive_id_type=open_id",{"receive_id":oid,"msg_type":"interactive","content":json.dumps(card,ensure_ascii=False)})
+
+def _arrow(d):
+    if d>0: return f"<font color='green'>↑{d}</font>"
+    if d<0: return f"<font color='red'>↓{abs(d)}</font>"
+    return "持平"
+
+def do_review(frankie_only=False,dry=False):
+    day=time.strftime("%Y-%m-%d")
+    reg=[r for r in lall(REG_APP,REG_TB) if r["fields"].get("状态") in ("在跑","筹备")]
+    snaps=lall(REG_APP,SNAP_TB)
+    prev={}
+    for s in snaps:
+        f=s["fields"]; k=(ext(f.get("ASIN")),f.get("站点")); ts=f.get("快照时间") or 0
+        if k not in prev or ts>prev[k][0]: prev[k]=(ts,f)
+    now=int(time.time()*1000); per_op={}; new_snap=[]; errors=[]
+    for r in reg:
+        f=r["fields"]
+        product=ext(f.get("产品")); site=f.get("站点"); asin=ext(f.get("ASIN")); region=f.get("区域")
+        op=ext(f.get("负责运营")); cat=ext(f.get("品类")) or "controller"
+        sid=int(ext(f.get("店铺sid")) or 0); sku=ext(f.get("seller_sku"))
+        app2=ext(f.get("作战台App_token")); t1=ext(f.get("词库表id"))
+        haverank=bool(ext(f.get("rank子表id"))) and f.get("状态")=="在跑"
+        try:
+            if not sku and sid: sku=lookup_sku(sid,asin)
+            if not sku: errors.append(f"{product}-{site}:无sku"); continue
+            lr=lx("/listing/publish/openapi/amazon/product/search",{"store_id":sid,"skus":[sku]})
+            L=load_listing(lr)
+            rows=[x["fields"] for x in lall(app2,t1) if x["fields"].get("站点")==site]
+            m=compute_audit(L,rows,cat)
+            if not dry:
+                try:
+                    tm={x["name"]:x["table_id"] for x in api("GET",f"/bitable/v1/apps/{app2}/tables?page_size=100")["data"]["items"]}
+                    refresh_t2(app2,t1,tm["表2·Listing埋词审计"],L,cat,site)
+                except Exception: pass
+            pv=prev.get((asin,site),(0,{}))[1]
+            if pv:
+                d_cov=m["cover_pct"]-(pv.get("埋词覆盖率") or 0); d_rec=m["recorded"]-(pv.get("已收录") or 0); d_p1=m["p1"]-(pv.get("首页") or 0)
+            else: d_cov=d_rec=d_p1=0
+            res={"product":product,"site":site,"region":region,"op":op,"asin":asin,"haverank":haverank,
+                 "m":m,"first":not pv,"d_cov":d_cov,"d_rec":d_rec,"d_p1":d_p1}
+            per_op.setdefault(op,[]).append(res)
+            new_snap.append({"快照键":f"{asin}-{site}-{now}","产品":product,"站点":site,"ASIN":asin,"区域":region,"负责运营":op,
+                "候选数":m["total"],"已收录":m["recorded"],"首页":m["p1"],"2-3页":m["p23"],"靠后":m["deep"],"已埋":m["embedded"],
+                "埋词覆盖率":m["cover_pct"],"合适词":m["fit"],"埋词覆盖Δ":d_cov,"收录Δ":d_rec,"首页Δ":d_p1,
+                "listing状态":m["status"],"有rank追踪":"是" if haverank else "否","快照时间":now})
+        except Exception as e:
+            errors.append(f"{product}-{site}:{str(e)[:80]}")
+    if new_snap and not dry: batch(REG_APP,SNAP_TB,new_snap)
+    # 每运营卡
+    if not frankie_only and not dry:
+        for op,items in per_op.items():
+            oid=OP_OID.get(op)
+            if not oid: continue
+            lines=[]
+            for it in sorted(items,key=lambda x:(x["m"]["status"]=="正常",-x["m"]["cover_pct"])):
+                m=it["m"]; tag="" if it["first"] else f" (覆盖{_arrow(it['d_cov'])} 收录{_arrow(it['d_rec'])} 首页{_arrow(it['d_p1'])})"
+                lines.append(f"**{it['product']} {it['site']}** · 埋词覆盖 {m['cover_pct']}% · 已收录 {m['recorded']}(首页{m['p1']}) · 合适词 {m['fit']}{tag}")
+                if m["status"]!="正常": lines.append(f"  🔴 listing **{m['status']}** → 先补全文案再谈埋词")
+                elif not it["haverank"]: lines.append("  ⚪ 收录追踪未铺开(以埋词覆盖率为准)")
+                if m["miss"]: lines.append("  📌 漏埋高价值: "+" / ".join(x["kw"] for x in m["miss"][:4]))
+                if not it["first"] and it["d_cov"]<0: lines.append("  ⚠️ 埋词覆盖**退步**,核对是否改 listing 改丢了词")
+            md=f"**{day} 万词周自检** · 你负责 {len(items)} 个作战台\n\n"+"\n".join(lines)+"\n\n> 详情开作战台表2;改 listing 是你的活,系统只审不改。"
+            im_card(oid,f"🟡 [AMZ·P2] 万词周自检 · {op}",md,"orange")
+    # Frankie 总digest
+    foid=OP_OID.get("潘志聪")
+    if foid:
+        allr=[x for v in per_op.values() for x in v]
+        improved=[x for x in allr if not x["first"] and (x["d_cov"]>0 or x["d_rec"]>0)]
+        stuck=[x for x in allr if x["m"]["status"]!="正常" or (not x["first"] and x["d_cov"]<0)]
+        L1=[f"✅ {x['product']} {x['site']}: 覆盖{_arrow(x['d_cov'])} 收录{_arrow(x['d_rec'])}" for x in improved] or ["（本周无明显改善）"]
+        L2=[f"🔴 {x['product']} {x['site']}: "+("listing "+x['m']['status'] if x['m']['status']!='正常' else f"埋词覆盖退步{_arrow(x['d_cov'])}")+f" — 催 {x['op']}" for x in stuck] or ["（无卡住）"]
+        base="(首轮=建立基线,delta 下周起有效)" if all(x["first"] for x in allr) else ""
+        md=(f"**{day} 万词周自检总览** · {len(allr)}个作战台 {base}\n\n"
+            f"**📈 改善 {len(improved)}**\n"+"\n".join(L1)+f"\n\n**🚨 卡住该催 {len(stuck)}**\n"+"\n".join(L2)
+            +(f"\n\n**⚠️ 异常 {len(errors)}**: "+" / ".join(errors[:8]) if errors else "")
+            +"\n\n> 收录 delta 仅 US 2 品有效(其余 rank 追踪未铺开,看埋词覆盖)。")
+        im_card(foid,f"🟡 [AMZ·P2] 万词周自检总览 · {day}",md,"blue")
+    return {"ok":True,"reviewed":len(per_op),"snap":len(new_snap),"errors":errors}
+
 app=FastAPI()
 @app.get("/")
 def root(): return {"service":"wanci-onboard","ok":True}
+@app.post("/review")
+async def review(req:Request):
+    if AUTH_TOKEN and req.headers.get("authorization","")!="Bearer "+AUTH_TOKEN: return {"ok":False,"err":"unauthorized"}
+    try: body=await req.json()
+    except Exception: body={}
+    threading.Thread(target=do_review,kwargs={"frankie_only":bool(body.get("frankie_only")),"dry":bool(body.get("dry_run"))},daemon=True).start()
+    return {"ok":True,"msg":"review started","frankie_only":bool(body.get("frankie_only")),"dry":bool(body.get("dry_run"))}
 @app.get("/selftest")
 def selftest():
     try:
