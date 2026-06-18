@@ -119,12 +119,30 @@ def incompatible_machine(kw,supp):
     if "lite" in k and "lite" not in supp: return True
     if (" switch 1 " in k or "switch one" in k or "switch 1 " in k) and "1" not in supp: return True
     return False
+TRADEMARK=["nintendo"]  # 主机商标(sony/microsoft 已在 OTHER_PLATFORM);走UGC/仅for-compatible措辞,不直写标题五点
+def is_trademark(k): kl=" "+k.lower()+" "; return any(t in kl for t in TRADEMARK)
+MISSPELL=[r'\bswich\b',r'\bswithc\b',r'\bswtich\b','switch2','nintendoswitch',r'\bprocontroller\b',r'\bninendo\b',r'\bnintedo\b',r'\bnintndo\b',r'\bcontoller\b',r'\bcontroler\b',r'\bcontorller\b',r'\bgamepd\b']
+def is_misspell(k):
+    kl=k.lower()
+    return any(re.search(p,kl) for p in MISSPELL)
+EN_SITES={"US","CA","UK","AU"}  # 英语关键词站; 其余(MX/DE/FR/ES/IT/JP)广告计划走本地化骨架
 def qualify_embed(kw,cat,supp):
     k=kw.lower()
+    if is_trademark(k) or is_misspell(k): return False  # 商标走UGC / 拼写变体只投广告不写listing
     if is_other_platform(k) or is_pure_console(k) or is_ip(k): return False
     if incompatible_machine(k,supp): return False
     if is_machine_compat(k): return True
     return any(a in k for a in CAT_ANCHORS.get(cat,CAT_ANCHORS["dock"]))
+def agg_roots(items):
+    """#2 按差异化词根(去机型词 switch/2/nintendo/oled..)聚合,同根只留最高vol代表+累加vol。
+    items: [{kw,vol,ord,...}](已按vol降序)。杀「132个switch 2变体逐个列漏埋」。"""
+    seen={}; out=[]
+    for r in items:
+        key=frozenset(t for t in toks(r["kw"]) if t not in MACHINE_TOK)
+        if not key: continue  # 纯机型词无差异化词根
+        if key in seen: seen[key]["vol"]=seen[key].get("vol",0)+r.get("vol",0); continue
+        rr=dict(r); seen[key]=rr; out.append(rr)
+    return out
 
 def load_listing(d):
     info=(d.get("data") or [{}])[0].get("info",{}); at=info.get("attributes",{}) or {}
@@ -322,10 +340,10 @@ def make_html(product,site,asin,store,L,rows,cat):
                   "rank":float(ext(f.get("我方自然排名")) or 0),"front":cov(kw,front),"instr":cov(kw,st),"qual":qualify_embed(kw,cat,supp)})
     total=len(R); embedded=sum(1 for r in R if r["front"] or r["instr"])
     rk=[r for r in R if r["rank"]>0]; p1=[r for r in rk if r["rank"]<=16]; p23=[r for r in rk if 16<r["rank"]<=48]; deep=[r for r in rk if r["rank"]>48]
-    sens=lambda r: r["mx"] in ("IP词","品牌词-竞品") or is_ip(r["kw"]) or is_comp(r["kw"])
+    sens=lambda r: r["mx"] in ("IP词","品牌词-竞品") or is_ip(r["kw"]) or is_comp(r["kw"]) or is_trademark(r["kw"])
     ugc=[r for r in R if sens(r)]; embeddable=[r for r in R if r["qual"] and not sens(r)]; noise=[r for r in R if (not r["qual"]) and not sens(r)]
     fit=len(embeddable)+len(ugc)
-    miss=sorted([r for r in embeddable if not(r["front"] or r["instr"])],key=lambda r:-(r["vol"]+r["ord"]*5000))
+    miss=agg_roots(sorted([r for r in embeddable if not(r["front"] or r["instr"])],key=lambda r:-(r["vol"]+r["ord"]*5000)))
     missu=sorted([r for r in ugc if not(r["front"] or r["instr"])],key=lambda r:-(r["vol"]+r["ord"]*5000))
     nz=sorted(noise,key=lambda r:-r["vol"])
     be=len(L["bullets"])==0; de=not L["desc"].strip(); se=not L["st"].strip(); buy="BUYABLE" in (L["status"] or [])
@@ -336,7 +354,8 @@ def make_html(product,site,asin,store,L,rows,cat):
         return f"<tr><td class='kw'>{esc(r['kw'])}</td><td><span class='tag'>{esc(r['mx'])}</span></td><td class='num'>{v}</td><td class='num'>{o}</td></tr>"
     miss_h="\n".join(trow(r) for r in miss[:20])
     ugc_h="\n".join(f"<li><span class='kw'>{esc(r['kw'])}</span> <span class='tag p'>{esc(r['mx'])}</span> 出单 {int(r['ord']) if r['ord'] else 0} → 引导 Review/QA</li>" for r in missu[:12]) or "<li>（无）</li>"
-    nz_h="\n".join(f"<tr><td class='kw' style='color:#8b94a3'>{esc(r['kw'])}</td><td><span class='tag n'>{esc(r['mx'])}→疑噪</span></td><td class='num'>{('{:,}'.format(int(r['vol']))) if r['vol'] else '—'}</td></tr>" for r in nz[:15]) or "<tr><td colspan=3 style='color:#6b7280'>（无）</td></tr>"
+    nlabel=lambda r:("拼写变体→广告可投·勿写listing" if is_misspell(r["kw"]) else esc(r["mx"])+"→疑噪")
+    nz_h="\n".join(f"<tr><td class='kw' style='color:#8b94a3'>{esc(r['kw'])}</td><td><span class='tag n'>{nlabel(r)}</span></td><td class='num'>{('{:,}'.format(int(r['vol']))) if r['vol'] else '—'}</td></tr>" for r in nz[:15]) or "<tr><td colspan=3 style='color:#6b7280'>（无）</td></tr>"
     if notext:
         hb=f"""<div class="callout c-red"><h2 style="margin-top:0">🔴 领星未拉到该 listing 文案（标题/五点/描述/ST 全空）</h2><ul><li>状态 <strong>{esc('/'.join(L['status']) or '未知')}</strong> 无任何文案字段。</li><li>可能 listing 未建全 或 领星未同步,请运营核实后台。本次无法做埋词覆盖分析;下方「已收录」仍有效。</li></ul></div>"""
     elif be or de or se or not buy:
@@ -350,7 +369,7 @@ def make_html(product,site,asin,store,L,rows,cat):
 <h2>📊 三个关键数（别混）</h2><div class="stat-row"><div class="stat"><div class="n">{total}</div><div class="l">候选池(词库总词)<br>含待校验噪音</div></div><div class="stat"><div class="n">{len(rk)}</div><div class="l">✅ 已收录(有自然排名)<br>占候选 {rkp}%</div></div><div class="stat"><div class="n">{embedded}</div><div class="l">已埋(埋进文案)<br>占候选 {ep}%</div></div><div class="stat"><div class="n">{fit}</div><div class="l">合适词(剔噪后)<br>直写{len(embeddable)}+UGC{len(ugc)}</div></div></div>
 <h2>🎯 已收录 {len(rk)} 词 · 收录质量分层</h2><div class="card"><div class="tier"><div class="tierbox t-good"><div class="tn">{len(p1)}</div><div class="tl">首页(≤16名)</div></div><div class="tierbox t-mid"><div class="tn">{len(p23)}</div><div class="tl">2-3页(17-48)</div></div><div class="tierbox t-bad"><div class="tn">{len(deep)}</div><div class="tl">靠后(&gt;48)</div></div></div><div style="color:var(--mut);font-size:13px;margin-top:10px">收录≠首页：{len(rk)} 个有排名里只 {len(p1)} 个首页，{len(deep)} 个在第3页后。万词要把它们往首页推 + 把合适漏埋词推进收录。</div></div>
 <h2>✅ 改进意见</h2><div class="card"><ol><li><strong>{'先补全文案+上架可售' if (be or de or se or not buy) else '补齐缺失埋词层'}</strong>：空层补全(可本地化美国站文案),确认库存价格变 BUYABLE。</li><li><strong>后台ST立即填</strong>：最易补,先塞高价值漏埋词。</li><li><strong>敏感词走UGC</strong>：nintendo 描述里 compatible with 埋1处;IP/竞品靠 Review/QA。</li><li><strong>机型兼容词可直写</strong>(本品支持的机型)。</li></ol></div>
-<h2>📌 高价值漏埋词 Top20 · 可直写补埋</h2><div style="color:var(--mut);font-size:13px">只留含本品类锚点+机型兼容词;游戏/别平台/跨品类/不兼容机型已排除。按月搜量+出单排序。</div>
+<h2>📌 高价值漏埋词根 Top20 · 可直写补埋</h2><div style="color:var(--mut);font-size:13px">已按<b>差异化词根聚合</b>(switch/switch 2/nintendo 等机型变体合并,只提示真正缺的卖点词根,不堆词);商标/竞品/IP/游戏/别平台/拼写变体已排除。月搜量为同根累加。</div>
 <table><thead><tr><th>关键词</th><th>矩阵</th><th class="num">月搜量</th><th class="num">已出单</th></tr></thead><tbody>{miss_h}</tbody></table>
 <div class="callout c-yel"><strong style="color:var(--yel)">⚠️ 走 UGC 不直写的敏感词</strong>(漏埋但靠 Review/QA 收录,别塞ST/五点)<ul style="margin-bottom:0">{ugc_h}</ul></div>
 <h2>🗑 候选池噪音（运营在表1「矩阵」校验）</h2><div style="color:var(--mut);font-size:13px">不含本品类锚点(游戏/别平台/跨品类/不兼容机型/价格二手),不算合适词,不必埋：</div>
@@ -362,7 +381,38 @@ COLORS=["red","pink","blue","black","white","green","purple","yellow","gray","gr
 PRICE=["used","refurbished","renewed","deals","cheap","clearance","second hand","segunda mano","usado","reacondicionado"]
 CROSS={"dock":["controller","case","carrying case","screen protector","grip","skin","joycon","tempered glass","wired controller"],"controller":["case","carrying case","cover","skin","dock","docking station","wall mount","screen protector","tempered glass","grip tape"],"case":["controller","dock","docking station","charger","grip","joycon","screen protector","wall mount"]}
 def P(name,atype,match,kws,bid,budget,acos,stage,reason): return {"计划名":name,"广告类型":atype,"匹配类型":match,"包含关键词":kws,"建议bid":bid,"建议日预算":budget,"目标ACoS":acos,"状态":"待审","阶段":stage,"开广告理由":reason,"已出单":0}
-def ads_tpl(cat):
+def ads_tpl_local(cat,site,rows):
+    """#4 非英语站(MX/DE/FR/ES/IT/JP): 骨架+本站词库本地词, bid/预算留空运营按本地市场填。"""
+    def ok(kl):  # 广告核心词: 排 拼写/IP/别平台/纯console/竞品 噪音(商标nintendo保留,ad可投)
+        if is_misspell(kl) or is_ip(kl) or is_other_platform(kl) or is_pure_console(kl) or is_comp(kl): return False
+        return True
+    def pick(n,pred=None):
+        c=[(float(ext(f.get("月搜索量")) or 0)+float(ext(f.get("已出单单量")) or 0)*5000, ext(f.get("关键词"))) for f in rows
+           if f.get("矩阵")=="意图词" and ext(f.get("关键词")) and ok(ext(f.get("关键词")).lower()) and (pred is None or pred(ext(f.get("关键词")).lower()))]
+        c.sort(reverse=True); seen=set(); o=[]
+        for _,w in c:
+            if w.lower() in seen: continue
+            seen.add(w.lower()); o.append(w)
+            if len(o)>=n: break
+        return " | ".join(o)
+    SELL=["hall","turbo","nfc","rgb","paddle","gatillo","4k","fan","ventilador","cooling","60hz","hdmi","ladestation"]
+    GIFTL=["regalo","cadeau","geschenk","regalo gamer","weihnacht"]
+    NF="待运营填(本地市场)"
+    core=pick(4) or "(从本站词库选本地核心词)"; mid=pick(4) or core
+    wb=lambda terms:(lambda k:any(re.search(r'\b'+re.escape(s)+r'\b',k) for s in terms))  # 词边界,防 fan 命中 fantasy
+    sell=pick(4,wb(SELL)) or "(本站卖点词)"
+    gift=pick(3,wb(GIFTL)) or "(本站礼品词:regalo/geschenk/cadeau)"
+    R=lambda w:w+" · 非英语站:词从本站词库选,bid 本地市场待运营定"
+    return [P(f"SP-Auto-捡词({site})","SP-Auto自动","自动(4匹配)","系统自动匹配",NF,NF,NF,"P1",R("起量挖本地搜索词")),
+            P(f"SP-Exact-核心大词({site})","SP手动Exact","Exact",core,NF,NF,NF,"P1",R("本站核心词Exact卡位")),
+            P(f"SP-Exact-中词扩量({site})","SP手动Exact","Exact",mid,NF,NF,NF,"P2",R("本站中词扩量")),
+            P(f"SP-Broad-长尾({site})","SP手动Broad","Broad",core,NF,NF,NF,"P1",R("Broad发本地长尾")),
+            P(f"SP-Exact-卖点簇({site})","SP手动Exact","Exact",sell,NF,NF,NF,"P2",R("本站卖点词")),
+            P(f"SD-竞品定投({site})","SD商品定投","ASIN定投","本站竞品ASIN(按本地市场选)",NF,NF,NF,"P2",R("SD打本地竞品")),
+            P(f"SBV-品牌簇({site})","SBV视频","Exact",core,NF,NF,NF,"P2",R("视频展示")),
+            P(f"SP-Exact-礼品({site})","SP手动Exact","Exact",gift,NF,NF,NF,"Q4",R("Q4礼品季"))]
+def ads_tpl(cat,site="US",rows=None):
+    if site not in EN_SITES: return ads_tpl_local(cat,site,rows or [])
     if cat=="controller": return [P("SP-Auto-手柄捡词","SP-Auto自动","自动(4匹配)","系统自动匹配","$0.45","$20","30%","P1","起量+挖搜索词;低bid捡漏"),P("SP-Exact-核心手柄大词","SP手动Exact","Exact","switch 2 controller | nintendo switch 2 controller | switch 2 pro controller","$1.0","$25","28%","P1","核心词Exact卡位"),P("SP-Exact-中词扩量","SP手动Exact","Exact","hall effect controller | switch controller wireless","$0.8","$20","30%","P2","中词扩量"),P("SP-Broad-手柄长尾","SP手动Broad","Broad","switch 2 controller with paddles | turbo controller switch","$0.5","$15","32%","P1","Broad发长尾(精准否锁大词)"),P("SP-Exact-卖点簇","SP手动Exact","Exact","hall effect joystick | back paddle controller | turbo | rgb controller","$0.7","$12","30%","P2","霍尔/背键/连发/RGB"),P("SD-竞品手柄定投","SD商品定投","ASIN定投","8bitdo/GameSir/NYXI 竞品ASIN","$0.6","$12","32%","P2","SD打竞品详情页"),P("SBV-手柄品牌簇","SBV视频","Exact","switch 2 controller","$1.0","$15","30%","P2","视频展示霍尔+握感"),P("SP-Exact-礼品词","SP手动Exact","Exact","gifts for gamers | switch gifts","$0.6","$10","32%","Q4","Q4礼品季")]
     if cat=="case": return [P("SP-Auto-卡盒捡词","SP-Auto自动","自动(4匹配)","系统自动匹配","$0.40","$15","30%","P1","起量+挖词"),P("SP-Exact-核心卡盒大词","SP手动Exact","Exact","switch 2 case | nintendo switch 2 case | switch 2 carrying case","$0.8","$20","28%","P1","核心词Exact卡位"),P("SP-Exact-中词扩量","SP手动Exact","Exact","switch 2 storage case | hard shell switch case | switch game holder","$0.6","$15","30%","P2","中词扩量"),P("SP-Broad-卡盒长尾","SP手动Broad","Broad","switch 2 travel case | slim case switch","$0.45","$12","32%","P1","Broad发长尾"),P("SP-Exact-卖点簇","SP手动Exact","Exact","hard shell switch 2 case | switch case 10 game","$0.55","$10","30%","P2","硬壳/卡槽/便携"),P("SD-竞品卡盒定投","SD商品定投","ASIN定投","tomtoc/Belkin 竞品ASIN","$0.5","$10","32%","P2","SD打竞品卡盒"),P("SBV-卡盒品牌簇","SBV视频","Exact","switch 2 case","$0.8","$12","30%","P2","展示卡槽+材质"),P("SP-Exact-礼品词","SP手动Exact","Exact","gifts for gamers | switch gifts","$0.5","$10","32%","Q4","Q4礼品季")]
     return [P("SP-Auto-dock捡词","SP-Auto自动","自动(4匹配)","系统自动匹配","$0.45","$20","28%","P1","起量+挖词"),P("SP-Exact-核心dock大词","SP手动Exact","Exact","switch 2 dock | nintendo switch 2 dock | switch 2 docking station","$1.2","$25","25%","P1","核心词Exact卡位"),P("SP-Exact-中词扩量","SP手动Exact","Exact","switch dock | switch 2 tv dock | switch 2 charging dock","$0.9","$20","28%","P2","中词扩量"),P("SP-Broad-dock长尾","SP手动Broad","Broad","switch 2 portable dock | switch oled dock","$0.5","$15","30%","P1","Broad发长尾"),P("SP-Exact-卖点簇","SP手动Exact","Exact","switch 2 dock with fan | switch 2 4k dock","$0.8","$12","28%","P2","散热/4K/充电"),P("SD-竞品dock定投","SD商品定投","ASIN定投","JSAUX/Genki 竞品ASIN","$0.6","$12","30%","P2","SD打竞品dock"),P("SBV-dock品牌簇","SBV视频","Exact","switch 2 dock","$1.0","$15","28%","P2","展示散热+4K"),P("SP-Exact-礼品词","SP手动Exact","Exact","gifts for gamers | switch gifts","$0.6","$10","32%","Q4","Q4礼品季")]
@@ -380,7 +430,11 @@ def fill_234(app,t1,t2,t3,t5,t6,L,cat,site):
         if mx not in ("意图词","品牌词-平台","品牌词-竞品","IP词"): continue
         inT=cov(kw,tt);inB=cov(kw,bt);inD=cov(kw,dt);inS=cov(kw,st);fr=cov(kw,front)
         ch=("直写前台(标题/五点/描述/后台ST)" if mx=="意图词" else ("后台ST已埋(for形式)+UGC" if (mx=="品牌词-平台" and "nintendo" in kw.lower()) else ("直写前台(标题/五点/描述/后台ST)" if mx=="品牌词-平台" else ("UGC评论QA+广告可打" if mx=="品牌词-竞品" else "UGC评论QA"))))
-        if fr or inS: status="已埋" if fr else "已埋(ST)"
+        kl=kw.lower()
+        if is_misspell(kl): status="拼写变体(广告可投·勿写listing)"
+        elif is_trademark(kl): status=("⚠️商标在标题/五点·撤(仅描述/ST用for-para措辞)" if (inT or inB) else ("ST合规(for形式)+UGC" if inS else "仅for/compatible措辞+UGC"))
+        elif is_comp(kl) or is_ip(kl) or mx in ("品牌词-竞品","IP词"): status="UGC引导(勿直写)"
+        elif fr or inS: status="已埋" if fr else "已埋(ST)"
         elif mx in ("意图词","品牌词-平台"): status="待埋(补描述)" if qualify_embed(kw,cat,supp) else "不埋"
         else: status="UGC待引导"
         t2r.append({"关键词":kw,"站点":site,"矩阵":mx,"埋词渠道":ch,"标题已埋":inT,"五点已埋":inB,"描述已埋":inD,"后台ST已埋":inS,"前台已覆盖":fr,"埋词状态":status})
@@ -388,7 +442,7 @@ def fill_234(app,t1,t2,t3,t5,t6,L,cat,site):
     n5=0
     if not lall(app,t5):
         n5=batch(app,t5,[{"阶段":"P1 (0-30d)","阶段目标":"低SPR小词冲首页+核心品类词建联","关键KPI":"核心词进首页;Auto挖词反哺","农村是否生效":"观察中","下阶段触发条件":"核心词稳定P1"},{"阶段":"P2 (30-60d)","阶段目标":"大词排名爬升+中词扩量+补埋","关键KPI":"大词进前2页;簇收录率>50%","农村是否生效":"观察中","下阶段触发条件":"大词进前2页+ACoS可控"},{"阶段":"P3 (60d+)","阶段目标":"核心词进前10转防守+SD打竞品","关键KPI":"核心词稳定前10","农村是否生效":"观察中","下阶段触发条件":"前10稳定2周"}])
-    clear(app,t3); n3=batch(app,t3,ads_tpl(cat))
+    clear(app,t3); n3=batch(app,t3,ads_tpl(cat,site,rows))
     clear(app,t6); out=[]; seen=set()
     def add(w,way,c,note):
         wl=w.strip().lower()
@@ -507,9 +561,9 @@ def compute_audit(L,rows,cat):
                   "rank":float(ext(f.get("我方自然排名")) or 0),"front":cov(kw,front),"instr":cov(kw,st),"qual":qualify_embed(kw,cat,supp)})
     total=len(R); embedded=sum(1 for r in R if r["front"] or r["instr"])
     rk=[r for r in R if r["rank"]>0]; p1=[r for r in rk if r["rank"]<=16]; p23=[r for r in rk if 16<r["rank"]<=48]; deep=[r for r in rk if r["rank"]>48]
-    sens=lambda r: r["mx"] in ("IP词","品牌词-竞品") or is_ip(r["kw"]) or is_comp(r["kw"])
+    sens=lambda r: r["mx"] in ("IP词","品牌词-竞品") or is_ip(r["kw"]) or is_comp(r["kw"]) or is_trademark(r["kw"])
     ugc=[r for r in R if sens(r)]; embeddable=[r for r in R if r["qual"] and not sens(r)]
-    miss=sorted([r for r in embeddable if not(r["front"] or r["instr"])],key=lambda r:-(r["vol"]+r["ord"]*5000))
+    miss=agg_roots(sorted([r for r in embeddable if not(r["front"] or r["instr"])],key=lambda r:-(r["vol"]+r["ord"]*5000)))
     be=len(L["bullets"])==0; de=not L["desc"].strip(); se=not L["st"].strip(); buy="BUYABLE" in (L["status"] or [])
     notext=(not L["title"].strip()) and be and de and se
     status="空listing" if notext else ("半成品" if (be or de or se or not buy) else "正常")
@@ -532,7 +586,11 @@ def refresh_t2(app,t1,t2,L,cat,site):
         if mx not in ("意图词","品牌词-平台","品牌词-竞品","IP词"): continue
         inT=cov(kw,tt);inB=cov(kw,bt);inD=cov(kw,dt);inS=cov(kw,st);fr=cov(kw,front)
         ch=("直写前台(标题/五点/描述/后台ST)" if mx=="意图词" else ("后台ST已埋(for形式)+UGC" if (mx=="品牌词-平台" and "nintendo" in kw.lower()) else ("直写前台(标题/五点/描述/后台ST)" if mx=="品牌词-平台" else ("UGC评论QA+广告可打" if mx=="品牌词-竞品" else "UGC评论QA"))))
-        if fr or inS: status="已埋" if fr else "已埋(ST)"
+        kl=kw.lower()
+        if is_misspell(kl): status="拼写变体(广告可投·勿写listing)"
+        elif is_trademark(kl): status=("⚠️商标在标题/五点·撤(仅描述/ST用for-para措辞)" if (inT or inB) else ("ST合规(for形式)+UGC" if inS else "仅for/compatible措辞+UGC"))
+        elif is_comp(kl) or is_ip(kl) or mx in ("品牌词-竞品","IP词"): status="UGC引导(勿直写)"
+        elif fr or inS: status="已埋" if fr else "已埋(ST)"
         elif mx in ("意图词","品牌词-平台"): status="待埋(补描述)" if qualify_embed(kw,cat,supp) else "不埋"
         else: status="UGC待引导"
         t2r.append({"关键词":kw,"站点":site,"矩阵":mx,"埋词渠道":ch,"标题已埋":inT,"五点已埋":inB,"描述已埋":inD,"后台ST已埋":inS,"前台已覆盖":fr,"埋词状态":status})
