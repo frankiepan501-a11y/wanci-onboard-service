@@ -100,7 +100,12 @@ CAT_ANCHORS={
  "controller":["controller","controllers","control","controles","mando","mandos","manette","manettes","gamepad","joystick","joy stick","hall effect","hall-effect","kontroller","joypad"],
  "dock":["dock","docking","station","ladestation","stand","ständer","stander","cradle","tv dock","charging dock","charger stand","charger dock","soporte","halterung","mount"]}
 IP_SENS=["piranha plant","piranha flower","mario","zelda","pokemon","pikmin","hello kitty","kirby","luigi","peach","bowser","amiibo","tomodachi","resident evil","smash bros","indiana jones","just dance","starfox","star fox","metroid","splatoon","donkey kong","animal crossing","pokopia","sonic","kart","gengar"]
-OTHER_PLATFORM=["pc","xbox","ps5","ps4","ps3","play 4","play 5","play station","playstation","dualsense","steam deck","steamdeck"," steam","vr glasses","3ds","psp","nintendo ds"," ds ","dsi","android","celular"," phone","movil","móvil","gamecube","game cube","n64","nintendo 64"," 64 ","ps portal","portal","yoto","ipad","iphone","raspberry"]
+HARD_PLATFORM=["xbox","ps5","ps4","ps3","play 4","play 5","play station","playstation","dualsense","steam deck","steamdeck"," steam","vr glasses","3ds","psp","nintendo ds"," ds ","dsi","gamecube","game cube","n64","nintendo 64"," 64 ","ps portal","portal","yoto","raspberry"]  # 协议/设备不兼容,永剔
+SOFT_PLATFORM=["pc","windows","android"," ios ","iphone","ipad"," phone","mobile","movil","móvil","celular","tablet"]  # 手柄常兼容; listing声明支持才放行(R4 林明坚)
+OTHER_PLATFORM=HARD_PLATFORM+SOFT_PLATFORM  # 兼容旧引用:无soft上下文时全排
+def is_hard_platform(k): kl=" "+k.lower()+" "; return any(n in kl for n in HARD_PLATFORM)
+def soft_platform_hit(k): kl=" "+k.lower()+" "; return any(n in kl for n in SOFT_PLATFORM)
+def supports_soft(text): t=" "+text.lower()+" "; return any(n in t for n in [" pc ","windows","android"," ios ","iphone","mobile"," phone"])
 PURE_CONSOLE=["console","consola","konsole","bundle"," games","switch games","spiele "]
 COMP_BRANDS=["8bitdo","8 bit do","8bit do","gamesir","razer","gulikit","nyxi","mobapad","hori ","ipega","flydigi","binbok","powera","power a","pxn","pdp ","nyko","iine","kingkong","easysmx","voyee","nitro deck","jsaux","genki","antank","belkin","tomtoc","spigen","dbrand","mooroer","fintie","procase","orzly","skull & co","skull and co","geekshare","playvital","geekria","mumba","younik","hyperkin"]
 COMP_DISPLAY={"8bitdo":"8BitDo","8 bit do":"8BitDo","8bit do":"8BitDo","gamesir":"GameSir","nyxi":"NYXI","powera":"PowerA","power a":"PowerA","pdp":"PDP","hori":"Hori","gulikit":"GuliKit","mobapad":"Mobapad","binbok":"Binbok","nitro deck":"Nitro Deck","ipega":"iPega","flydigi":"Flydigi","easysmx":"EasySMX","voyee":"VOYEE","pxn":"PXN","hyperkin":"Hyperkin","nyko":"Nyko","iine":"IINE","jsaux":"JSAUX","genki":"Genki","tomtoc":"tomtoc","belkin":"Belkin","spigen":"Spigen","razer":"Razer"}
@@ -127,10 +132,12 @@ def is_misspell(k):
     kl=k.lower()
     return any(re.search(p,kl) for p in MISSPELL)
 EN_SITES={"US","CA","UK","AU"}  # 英语关键词站; 其余(MX/DE/FR/ES/IT/JP)广告计划走本地化骨架
-def qualify_embed(kw,cat,supp):
+def qualify_embed(kw,cat,supp,soft=False):
     k=kw.lower()
     if is_trademark(k) or is_misspell(k): return False  # 商标走UGC / 拼写变体只投广告不写listing
-    if is_other_platform(k) or is_pure_console(k) or is_ip(k): return False
+    if is_hard_platform(k): return False  # xbox/ps/steam 永剔
+    if soft_platform_hit(k) and not soft: return False  # pc/手机: listing没声明支持则剔(R4)
+    if is_pure_console(k) or is_ip(k): return False
     if incompatible_machine(k,supp): return False
     if is_machine_compat(k): return True
     return any(a in k for a in CAT_ANCHORS.get(cat,CAT_ANCHORS["dock"]))
@@ -329,7 +336,7 @@ def clone_app(name):
 # ───────────────── HTML 审计 (港 audit_listing make) ─────────────────
 def esc(s): return str(s).replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
 def make_html(product,site,asin,store,L,rows,cat):
-    supp=supported_machines(L["title"]+" "+" ".join(L["bullets"])+" "+L["desc"])
+    supp=supported_machines(L["title"]+" "+" ".join(L["bullets"])+" "+L["desc"]); soft=supports_soft(L["title"]+" "+" ".join(L["bullets"])+" "+L["desc"]+" "+L["st"])
     tt=set(toks(L["title"])); bt=set()
     for b in L["bullets"]: bt|=set(toks(b))
     dt=set(toks(L["desc"])); st=set(toks(L["st"])); front=tt|bt|dt
@@ -338,7 +345,7 @@ def make_html(product,site,asin,store,L,rows,cat):
     for r in rows:
         f=r["fields"]; kw=ext(f.get("关键词"))
         R.append({"kw":kw,"mx":f.get("矩阵"),"vol":float(ext(f.get("月搜索量")) or 0),"ord":float(ext(f.get("已出单单量")) or 0),
-                  "rank":float(ext(f.get("我方自然排名")) or 0),"front":cov(kw,front),"instr":cov(kw,st),"qual":qualify_embed(kw,cat,supp)})
+                  "rank":float(ext(f.get("我方自然排名")) or 0),"front":cov(kw,front),"instr":cov(kw,st),"qual":qualify_embed(kw,cat,supp,soft)})
     total=len(R); embedded=sum(1 for r in R if r["front"] or r["instr"])
     rk=[r for r in R if r["rank"]>0]; p1=[r for r in rk if r["rank"]<=16]; p23=[r for r in rk if 16<r["rank"]<=48]; deep=[r for r in rk if r["rank"]>48]
     sens=lambda r: r["mx"] in ("IP词","品牌词-竞品") or is_ip(r["kw"]) or is_comp(r["kw"]) or is_trademark(r["kw"])
@@ -347,6 +354,8 @@ def make_html(product,site,asin,store,L,rows,cat):
     miss=agg_roots(sorted([r for r in embeddable if not(r["front"] or r["instr"])],key=lambda r:-(r["vol"]+r["ord"]*5000)))
     missu=sorted([r for r in ugc if not(r["front"] or r["instr"])],key=lambda r:-(r["vol"]+r["ord"]*5000))
     nz=sorted(noise,key=lambda r:-r["vol"])
+    softw=sorted([r for r in R if soft_platform_hit(r["kw"]) and not is_hard_platform(r["kw"]) and not is_ip(r["kw"]) and not is_comp(r["kw"])],key=lambda r:-r["vol"])
+    soft_hint=("" if (soft or not softw) else f"<div class=\"callout c-yel\"><strong style=\"color:var(--yel)\">💡 多平台机会（{len(softw)} 个 PC/手机词暂被剔）</strong>：本品 listing 未声明 PC/手机支持，故按别平台剔除。若产品实际支持 PC/Android（多数 Switch 手柄支持），listing 补一句「Compatible with PC / Android / iOS」即可解锁这些词进埋词+广告。Top：{' / '.join(esc(r['kw']) for r in softw[:8])}</div>")
     be=len(L["bullets"])==0; de=not L["desc"].strip(); se=not L["st"].strip(); buy="BUYABLE" in (L["status"] or [])
     notext=(not L["title"].strip()) and be and de and se
     rkp=round(100.0*len(rk)/max(total,1)); ep=round(100.0*embedded/max(total,1))
@@ -373,6 +382,7 @@ def make_html(product,site,asin,store,L,rows,cat):
 <h2>📌 高价值漏埋词根 Top20 · 可直写补埋</h2><div style="color:var(--mut);font-size:13px">已按<b>差异化词根聚合</b>(switch/switch 2/nintendo 等机型变体合并,只提示真正缺的卖点词根,不堆词);商标/竞品/IP/游戏/别平台/拼写变体已排除。月搜量为同根累加。</div>
 <table><thead><tr><th>关键词</th><th>矩阵</th><th class="num">月搜量</th><th class="num">已出单</th></tr></thead><tbody>{miss_h}</tbody></table>
 <div class="callout c-yel"><strong style="color:var(--yel)">⚠️ 走 UGC 不直写的敏感词</strong>(漏埋但靠 Review/QA 收录,别塞ST/五点)<ul style="margin-bottom:0">{ugc_h}</ul></div>
+{soft_hint}
 <h2>🗑 候选池噪音（运营在表1「矩阵」校验）</h2><div style="color:var(--mut);font-size:13px">不含本品类锚点(游戏/别平台/跨品类/不兼容机型/价格二手),不算合适词,不必埋：</div>
 <table><thead><tr><th>关键词</th><th>判定</th><th class="num">月搜量</th></tr></thead><tbody>{nz_h}</tbody></table>
 <div class="foot">领星 product/search 拉真实文案 → 词库逐词比对 + 自然排名收录分层 + 品类锚点白名单净化。矩阵为系统初分,运营校验。本服务自动生成。</div></div></body></html>"""
@@ -392,11 +402,12 @@ def local_comp_brands(rows,topn=8):
         for b in COMP_BRANDS:
             if b in kw: c[COMP_DISPLAY.get(b.strip(),b.strip().title())]+=1+vol/100000.0  # 出现1次=+1,月搜量仅微调tiebreak
     return [b for b,_ in c.most_common(topn)]
-def ads_tpl_local(cat,site,rows):
+def ads_tpl_local(cat,site,rows,soft=False):
     """#4 非英语站(MX/DE/FR/ES/IT/JP): 骨架+本站词库本地词, bid/预算留空运营按本地市场填。"""
     anchors=CAT_ANCHORS.get(cat,CAT_ANCHORS["dock"])
-    def ok(kl):  # 广告核心词: 排 拼写/IP/别平台/纯console/竞品(商标nintendo保留,ad可投); 且必须品类/机型相关(防"sing meinen song"类高搜noise)
-        if is_misspell(kl) or is_ip(kl) or is_other_platform(kl) or is_pure_console(kl) or is_comp(kl): return False
+    def ok(kl):  # 广告核心词: 排 拼写/IP/硬别平台/纯console/竞品(商标nintendo保留,ad可投); 且必须品类/机型相关(防"sing meinen song"类高搜noise)
+        if is_misspell(kl) or is_ip(kl) or is_hard_platform(kl) or is_pure_console(kl) or is_comp(kl): return False
+        if soft_platform_hit(kl) and not soft: return False  # pc/手机词: listing没声明支持才剔(R4)
         if any(a in kl for a in anchors): return True
         return is_machine_compat(kl)  # 纯机型词(nintendo switch 2)放行;跨品类(switch 2 controller 对dock)剔除
     def pick(n,pred=None):
@@ -424,21 +435,21 @@ def ads_tpl_local(cat,site,rows):
             P(f"SD-竞品定投({site})","SD商品定投","ASIN定投","本站竞品ASIN(按本地市场选)",NF,NF,NF,"P2",R("SD打本地竞品")),
             P(f"SBV-品牌簇({site})","SBV视频","Exact",core,NF,NF,NF,"P2",R("视频展示")),
             P(f"SP-Exact-礼品({site})","SP手动Exact","Exact",gift,NF,NF,NF,"Q4",R("Q4礼品季"))]
-def _ads_tpl_base(cat,site,rows):
-    if site not in EN_SITES: return ads_tpl_local(cat,site,rows)
+def _ads_tpl_base(cat,site,rows,soft=False):
+    if site not in EN_SITES: return ads_tpl_local(cat,site,rows,soft)
     if cat=="controller": return [P("SP-Auto-手柄捡词","SP-Auto自动","自动(4匹配)","系统自动匹配","$0.45","$20","30%","P1","起量+挖搜索词;低bid捡漏"),P("SP-Exact-核心手柄大词","SP手动Exact","Exact","switch 2 controller | nintendo switch 2 controller | switch 2 pro controller","$1.0","$25","28%","P1","核心词Exact卡位"),P("SP-Exact-中词扩量","SP手动Exact","Exact","hall effect controller | switch controller wireless","$0.8","$20","30%","P2","中词扩量"),P("SP-Broad-手柄长尾","SP手动Broad","Broad","switch 2 controller with paddles | turbo controller switch","$0.5","$15","32%","P1","Broad发长尾(精准否锁大词)"),P("SP-Exact-卖点簇","SP手动Exact","Exact","hall effect joystick | back paddle controller | turbo | rgb controller","$0.7","$12","30%","P2","霍尔/背键/连发/RGB"),P("SD-竞品手柄定投","SD商品定投","ASIN定投","8bitdo/GameSir/NYXI 竞品ASIN","$0.6","$12","32%","P2","SD打竞品详情页"),P("SBV-手柄品牌簇","SBV视频","Exact","switch 2 controller","$1.0","$15","30%","P2","视频展示霍尔+握感"),P("SP-Exact-礼品词","SP手动Exact","Exact","gifts for gamers | switch gifts","$0.6","$10","32%","Q4","Q4礼品季")]
     if cat=="case": return [P("SP-Auto-卡盒捡词","SP-Auto自动","自动(4匹配)","系统自动匹配","$0.40","$15","30%","P1","起量+挖词"),P("SP-Exact-核心卡盒大词","SP手动Exact","Exact","switch 2 case | nintendo switch 2 case | switch 2 carrying case","$0.8","$20","28%","P1","核心词Exact卡位"),P("SP-Exact-中词扩量","SP手动Exact","Exact","switch 2 storage case | hard shell switch case | switch game holder","$0.6","$15","30%","P2","中词扩量"),P("SP-Broad-卡盒长尾","SP手动Broad","Broad","switch 2 travel case | slim case switch","$0.45","$12","32%","P1","Broad发长尾"),P("SP-Exact-卖点簇","SP手动Exact","Exact","hard shell switch 2 case | switch case 10 game","$0.55","$10","30%","P2","硬壳/卡槽/便携"),P("SD-竞品卡盒定投","SD商品定投","ASIN定投","tomtoc/Belkin 竞品ASIN","$0.5","$10","32%","P2","SD打竞品卡盒"),P("SBV-卡盒品牌簇","SBV视频","Exact","switch 2 case","$0.8","$12","30%","P2","展示卡槽+材质"),P("SP-Exact-礼品词","SP手动Exact","Exact","gifts for gamers | switch gifts","$0.5","$10","32%","Q4","Q4礼品季")]
     return [P("SP-Auto-dock捡词","SP-Auto自动","自动(4匹配)","系统自动匹配","$0.45","$20","28%","P1","起量+挖词"),P("SP-Exact-核心dock大词","SP手动Exact","Exact","switch 2 dock | nintendo switch 2 dock | switch 2 docking station","$1.2","$25","25%","P1","核心词Exact卡位"),P("SP-Exact-中词扩量","SP手动Exact","Exact","switch dock | switch 2 tv dock | switch 2 charging dock","$0.9","$20","28%","P2","中词扩量"),P("SP-Broad-dock长尾","SP手动Broad","Broad","switch 2 portable dock | switch oled dock","$0.5","$15","30%","P1","Broad发长尾"),P("SP-Exact-卖点簇","SP手动Exact","Exact","switch 2 dock with fan | switch 2 4k dock","$0.8","$12","28%","P2","散热/4K/充电"),P("SD-竞品dock定投","SD商品定投","ASIN定投","JSAUX/Genki 竞品ASIN","$0.6","$12","30%","P2","SD打竞品dock"),P("SBV-dock品牌簇","SBV视频","Exact","switch 2 dock","$1.0","$15","28%","P2","展示散热+4K"),P("SP-Exact-礼品词","SP手动Exact","Exact","gifts for gamers | switch gifts","$0.6","$10","32%","Q4","Q4礼品季")]
-def ads_tpl(cat,site="US",rows=None):
+def ads_tpl(cat,site="US",rows=None,soft=False):
     rows=rows or []
-    lst=_ads_tpl_base(cat,site,rows)
+    lst=_ads_tpl_base(cat,site,rows,soft)
     comp=local_comp_brands(rows)  # #翔宇: SD竞品定投用本站市场真实竞品(MX=PowerA/PDP/8bitdo)非美国硬编
     if comp:
         for p in lst:
             if "竞品" in p["计划名"]: p["包含关键词"]="竞品ASIN定投·本站市场: "+" / ".join(comp)+" (取自本站词库竞品;具体ASIN见表1「竞品前十ASIN」列;运营可补市场畅销竞品)"
     return lst
 def fill_234(app,t1,t2,t3,t5,t6,L,cat,site):
-    supp=supported_machines(L["title"]+" "+" ".join(L["bullets"])+" "+L["desc"])
+    supp=supported_machines(L["title"]+" "+" ".join(L["bullets"])+" "+L["desc"]); soft=supports_soft(L["title"]+" "+" ".join(L["bullets"])+" "+L["desc"]+" "+L["st"])
     tt=set(toks(L["title"])); bt=set()
     for b in L["bullets"]: bt|=set(toks(b))
     dt=set(toks(L["desc"])); st=set(toks(L["st"])); front=tt|bt|dt
@@ -456,14 +467,14 @@ def fill_234(app,t1,t2,t3,t5,t6,L,cat,site):
         elif is_trademark(kl): status=("⚠️商标在标题/五点·撤(仅描述/ST用for-para措辞)" if (inT or inB) else ("ST合规(for形式)+UGC" if inS else "仅for/compatible措辞+UGC"))
         elif is_comp(kl) or is_ip(kl) or mx in ("品牌词-竞品","IP词"): status="UGC引导(勿直写)"
         elif fr or inS: status="已埋" if fr else "已埋(ST)"
-        elif mx in ("意图词","品牌词-平台"): status="待埋(补描述)" if qualify_embed(kw,cat,supp) else "不埋"
+        elif mx in ("意图词","品牌词-平台"): status="待埋(补描述)" if qualify_embed(kw,cat,supp,soft) else "不埋"
         else: status="UGC待引导"
         t2r.append({"关键词":kw,"站点":site,"矩阵":mx,"埋词渠道":ch,"标题已埋":inT,"五点已埋":inB,"描述已埋":inD,"后台ST已埋":inS,"前台已覆盖":fr,"埋词状态":status})
     n2=batch(app,t2,t2r)
     n5=0
     if not lall(app,t5):
         n5=batch(app,t5,[{"阶段":"P1 (0-30d)","阶段目标":"低SPR小词冲首页+核心品类词建联","关键KPI":"核心词进首页;Auto挖词反哺","农村是否生效":"观察中","下阶段触发条件":"核心词稳定P1"},{"阶段":"P2 (30-60d)","阶段目标":"大词排名爬升+中词扩量+补埋","关键KPI":"大词进前2页;簇收录率>50%","农村是否生效":"观察中","下阶段触发条件":"大词进前2页+ACoS可控"},{"阶段":"P3 (60d+)","阶段目标":"核心词进前10转防守+SD打竞品","关键KPI":"核心词稳定前10","农村是否生效":"观察中","下阶段触发条件":"前10稳定2周"}])
-    clear(app,t3); n3=batch(app,t3,ads_tpl(cat,site,rows))
+    clear(app,t3); n3=batch(app,t3,ads_tpl(cat,site,rows,soft))
     clear(app,t6); out=[]; seen=set()
     def add(w,way,c,note):
         wl=w.strip().lower()
@@ -472,7 +483,9 @@ def fill_234(app,t1,t2,t3,t5,t6,L,cat,site):
     for c in COLORS: add(c,"词组否定","颜色词","本品单色,其余颜色整片否(运营留自己色)")
     for w in PRICE: add(w,"词组否定","其他(配件/平台)","价格/二手意图")
     for w in CROSS.get(cat,[]): add(w,"词组否定","其他(配件/平台)","别品类配件,整片屏蔽")
-    for w in ["xbox","ps5","ps4","ps3","playstation","dualsense","pc","steam controller","android"]: add(w,"词组否定","其他(配件/平台)","别平台,整片屏蔽")
+    for w in ["xbox","ps5","ps4","ps3","playstation","dualsense","steam controller"]: add(w,"词组否定","其他(配件/平台)","别平台,整片屏蔽")
+    if not soft:  # R4: listing没声明支持PC/手机才否; 声明支持则pc/android是有效兼容流量不否
+        for w in ["pc","android"]: add(w,"词组否定","其他(配件/平台)","别平台(本品未声明PC/手机支持);若支持则listing补一句并移除此否定")
     for f in rows:
         kw=ext(f.get("关键词")); mx=f.get("矩阵"); kl=kw.lower()
         if not kw: continue
@@ -570,7 +583,7 @@ def process(rid):
 # ───────────────── L3 每周复审 ─────────────────
 def compute_audit(L,rows,cat):
     """rows = 表1 fields dict 列表(已按站点过滤)。返回审计指标 dict(给周快照+delta用)。"""
-    supp=supported_machines(L["title"]+" "+" ".join(L["bullets"])+" "+L["desc"])
+    supp=supported_machines(L["title"]+" "+" ".join(L["bullets"])+" "+L["desc"]); soft=supports_soft(L["title"]+" "+" ".join(L["bullets"])+" "+L["desc"]+" "+L["st"])
     tt=set(toks(L["title"])); bt=set()
     for b in L["bullets"]: bt|=set(toks(b))
     dt=set(toks(L["desc"])); st=set(toks(L["st"])); front=tt|bt|dt
@@ -579,7 +592,7 @@ def compute_audit(L,rows,cat):
     for f in rows:
         kw=ext(f.get("关键词"))
         R.append({"kw":kw,"mx":f.get("矩阵"),"vol":float(ext(f.get("月搜索量")) or 0),"ord":float(ext(f.get("已出单单量")) or 0),
-                  "rank":float(ext(f.get("我方自然排名")) or 0),"front":cov(kw,front),"instr":cov(kw,st),"qual":qualify_embed(kw,cat,supp)})
+                  "rank":float(ext(f.get("我方自然排名")) or 0),"front":cov(kw,front),"instr":cov(kw,st),"qual":qualify_embed(kw,cat,supp,soft)})
     total=len(R); embedded=sum(1 for r in R if r["front"] or r["instr"])
     rk=[r for r in R if r["rank"]>0]; p1=[r for r in rk if r["rank"]<=16]; p23=[r for r in rk if 16<r["rank"]<=48]; deep=[r for r in rk if r["rank"]>48]
     sens=lambda r: r["mx"] in ("IP词","品牌词-竞品") or is_ip(r["kw"]) or is_comp(r["kw"]) or is_trademark(r["kw"])
@@ -594,7 +607,7 @@ def compute_audit(L,rows,cat):
 
 def refresh_t2(app,t1,t2,L,cat,site):
     """只刷表2(Listing埋词审计),保持与最新 listing 文案同步(摘自 fill_234 表2 段)。"""
-    supp=supported_machines(L["title"]+" "+" ".join(L["bullets"])+" "+L["desc"])
+    supp=supported_machines(L["title"]+" "+" ".join(L["bullets"])+" "+L["desc"]); soft=supports_soft(L["title"]+" "+" ".join(L["bullets"])+" "+L["desc"]+" "+L["st"])
     tt=set(toks(L["title"])); bt=set()
     for b in L["bullets"]: bt|=set(toks(b))
     dt=set(toks(L["desc"])); st=set(toks(L["st"])); front=tt|bt|dt
@@ -612,7 +625,7 @@ def refresh_t2(app,t1,t2,L,cat,site):
         elif is_trademark(kl): status=("⚠️商标在标题/五点·撤(仅描述/ST用for-para措辞)" if (inT or inB) else ("ST合规(for形式)+UGC" if inS else "仅for/compatible措辞+UGC"))
         elif is_comp(kl) or is_ip(kl) or mx in ("品牌词-竞品","IP词"): status="UGC引导(勿直写)"
         elif fr or inS: status="已埋" if fr else "已埋(ST)"
-        elif mx in ("意图词","品牌词-平台"): status="待埋(补描述)" if qualify_embed(kw,cat,supp) else "不埋"
+        elif mx in ("意图词","品牌词-平台"): status="待埋(补描述)" if qualify_embed(kw,cat,supp,soft) else "不埋"
         else: status="UGC待引导"
         t2r.append({"关键词":kw,"站点":site,"矩阵":mx,"埋词渠道":ch,"标题已埋":inT,"五点已埋":inB,"描述已埋":inD,"后台ST已埋":inS,"前台已覆盖":fr,"埋词状态":status})
     return batch(app,t2,t2r)
