@@ -383,9 +383,11 @@ CROSS={"dock":["controller","case","carrying case","screen protector","grip","sk
 def P(name,atype,match,kws,bid,budget,acos,stage,reason): return {"计划名":name,"广告类型":atype,"匹配类型":match,"包含关键词":kws,"建议bid":bid,"建议日预算":budget,"目标ACoS":acos,"状态":"待审","阶段":stage,"开广告理由":reason,"已出单":0}
 def ads_tpl_local(cat,site,rows):
     """#4 非英语站(MX/DE/FR/ES/IT/JP): 骨架+本站词库本地词, bid/预算留空运营按本地市场填。"""
-    def ok(kl):  # 广告核心词: 排 拼写/IP/别平台/纯console/竞品 噪音(商标nintendo保留,ad可投)
+    anchors=CAT_ANCHORS.get(cat,CAT_ANCHORS["dock"])
+    def ok(kl):  # 广告核心词: 排 拼写/IP/别平台/纯console/竞品(商标nintendo保留,ad可投); 且必须品类/机型相关(防"sing meinen song"类高搜noise)
         if is_misspell(kl) or is_ip(kl) or is_other_platform(kl) or is_pure_console(kl) or is_comp(kl): return False
-        return True
+        if any(a in kl for a in anchors): return True
+        return is_machine_compat(kl)  # 纯机型词(nintendo switch 2)放行;跨品类(switch 2 controller 对dock)剔除
     def pick(n,pred=None):
         c=[(float(ext(f.get("月搜索量")) or 0)+float(ext(f.get("已出单单量")) or 0)*5000, ext(f.get("关键词"))) for f in rows
            if f.get("矩阵")=="意图词" and ext(f.get("关键词")) and ok(ext(f.get("关键词")).lower()) and (pred is None or pred(ext(f.get("关键词")).lower()))]
