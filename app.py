@@ -102,7 +102,8 @@ CAT_ANCHORS={
 IP_SENS=["piranha plant","piranha flower","mario","zelda","pokemon","pikmin","hello kitty","kirby","luigi","peach","bowser","amiibo","tomodachi","resident evil","smash bros","indiana jones","just dance","starfox","star fox","metroid","splatoon","donkey kong","animal crossing","pokopia","sonic","kart","gengar"]
 OTHER_PLATFORM=["pc","xbox","ps5","ps4","ps3","play 4","play 5","play station","playstation","dualsense","steam deck","steamdeck"," steam","vr glasses","3ds","psp","nintendo ds"," ds ","dsi","android","celular"," phone","movil","móvil","gamecube","game cube","n64","nintendo 64"," 64 ","ps portal","portal","yoto","ipad","iphone","raspberry"]
 PURE_CONSOLE=["console","consola","konsole","bundle"," games","switch games","spiele "]
-COMP_BRANDS=["8bitdo","8 bit do","8bit do","gamesir","razer","gulikit","nyxi","mobapad","hori ","ipega","flydigi","binbok","powera","pdp ","nyko","iine","kingkong","easysmx","voyee","nitro deck","jsaux","genki","antank","belkin","tomtoc","spigen","dbrand","mooroer","fintie","procase","orzly","skull & co","skull and co","geekshare","playvital","geekria","mumba","younik","hyperkin"]
+COMP_BRANDS=["8bitdo","8 bit do","8bit do","gamesir","razer","gulikit","nyxi","mobapad","hori ","ipega","flydigi","binbok","powera","power a","pxn","pdp ","nyko","iine","kingkong","easysmx","voyee","nitro deck","jsaux","genki","antank","belkin","tomtoc","spigen","dbrand","mooroer","fintie","procase","orzly","skull & co","skull and co","geekshare","playvital","geekria","mumba","younik","hyperkin"]
+COMP_DISPLAY={"8bitdo":"8BitDo","8 bit do":"8BitDo","8bit do":"8BitDo","gamesir":"GameSir","nyxi":"NYXI","powera":"PowerA","power a":"PowerA","pdp":"PDP","hori":"Hori","gulikit":"GuliKit","mobapad":"Mobapad","binbok":"Binbok","nitro deck":"Nitro Deck","ipega":"iPega","flydigi":"Flydigi","easysmx":"EasySMX","voyee":"VOYEE","pxn":"PXN","hyperkin":"Hyperkin","nyko":"Nyko","iine":"IINE","jsaux":"JSAUX","genki":"Genki","tomtoc":"tomtoc","belkin":"Belkin","spigen":"Spigen","razer":"Razer"}
 MACHINE_TOK=set(["nintendo","switch","2","oled","lite","1","one"])
 def is_ip(k): kl=" "+k.lower()+" "; return any(n in kl for n in IP_SENS)
 def is_other_platform(k): kl=" "+k.lower()+" "; return any(n in kl for n in OTHER_PLATFORM)
@@ -165,7 +166,7 @@ TERM_HDRS=["用户搜索词","客户搜索词","customer search term","search te
 ORDER_HDRS=["广告订单","7 day total orders (#)","7天总订单数(#)","total orders","订单数","订单量"]
 IPg=["zelda","mario","pokemon","pikachu","kirby","minecraft","rosalina","yoshi","splatoon","metroid","sonic","dave","diver","luminex","animal crossing"]
 PRICEg=["used","refurbished","renewed","deals","cheap","clearance","segunda mano","usado","reacondicionado","barato","oferta"]
-COMPg=["8bitdo","gamesir","nyxi","mobapad","jsaux","genki","antank","binbok","ponkor","hori","oivo","gulikit","kdd","younik","natuk","jingmai","fastsnail","nexigo"]
+COMPg=["8bitdo","gamesir","nyxi","mobapad","jsaux","genki","antank","binbok","ponkor","hori","oivo","gulikit","kdd","younik","natuk","jingmai","fastsnail","nexigo","powera","power a","pdp","pxn"]
 GIFTg=["gift","gifts","regalo","regalos"]
 PLATFORMg=set(["switch","nintendo switch","switch 2","nintendo switch 2","nintendo","switch oled","nintendo switch oled","switch lite","nintendo switch lite","switch 2 console","nintendo switch 2 console","consola switch","consola nintendo switch"])
 def matrix(kw):
@@ -381,6 +382,16 @@ COLORS=["red","pink","blue","black","white","green","purple","yellow","gray","gr
 PRICE=["used","refurbished","renewed","deals","cheap","clearance","second hand","segunda mano","usado","reacondicionado"]
 CROSS={"dock":["controller","case","carrying case","screen protector","grip","skin","joycon","tempered glass","wired controller"],"controller":["case","carrying case","cover","skin","dock","docking station","wall mount","screen protector","tempered glass","grip tape"],"case":["controller","dock","docking station","charger","grip","joycon","screen protector","wall mount"]}
 def P(name,atype,match,kws,bid,budget,acos,stage,reason): return {"计划名":name,"广告类型":atype,"匹配类型":match,"包含关键词":kws,"建议bid":bid,"建议日预算":budget,"目标ACoS":acos,"状态":"待审","阶段":stage,"开广告理由":reason,"已出单":0}
+def local_comp_brands(rows,topn=8):
+    """#翔宇: SD竞品定投取本站词库真实竞品品牌(本地市场)非美国硬编。
+    按「变体出现数」为主(防月搜量缺失埋没 PowerA/PDP 等少变体但市场突出品牌),月搜量为次。"""
+    from collections import Counter
+    c=Counter()
+    for f in rows:
+        kw=" "+ext(f.get("关键词")).lower()+" "; vol=float(ext(f.get("月搜索量")) or 0)
+        for b in COMP_BRANDS:
+            if b in kw: c[COMP_DISPLAY.get(b.strip(),b.strip().title())]+=1+vol/100000.0  # 出现1次=+1,月搜量仅微调tiebreak
+    return [b for b,_ in c.most_common(topn)]
 def ads_tpl_local(cat,site,rows):
     """#4 非英语站(MX/DE/FR/ES/IT/JP): 骨架+本站词库本地词, bid/预算留空运营按本地市场填。"""
     anchors=CAT_ANCHORS.get(cat,CAT_ANCHORS["dock"])
@@ -413,11 +424,19 @@ def ads_tpl_local(cat,site,rows):
             P(f"SD-竞品定投({site})","SD商品定投","ASIN定投","本站竞品ASIN(按本地市场选)",NF,NF,NF,"P2",R("SD打本地竞品")),
             P(f"SBV-品牌簇({site})","SBV视频","Exact",core,NF,NF,NF,"P2",R("视频展示")),
             P(f"SP-Exact-礼品({site})","SP手动Exact","Exact",gift,NF,NF,NF,"Q4",R("Q4礼品季"))]
-def ads_tpl(cat,site="US",rows=None):
-    if site not in EN_SITES: return ads_tpl_local(cat,site,rows or [])
+def _ads_tpl_base(cat,site,rows):
+    if site not in EN_SITES: return ads_tpl_local(cat,site,rows)
     if cat=="controller": return [P("SP-Auto-手柄捡词","SP-Auto自动","自动(4匹配)","系统自动匹配","$0.45","$20","30%","P1","起量+挖搜索词;低bid捡漏"),P("SP-Exact-核心手柄大词","SP手动Exact","Exact","switch 2 controller | nintendo switch 2 controller | switch 2 pro controller","$1.0","$25","28%","P1","核心词Exact卡位"),P("SP-Exact-中词扩量","SP手动Exact","Exact","hall effect controller | switch controller wireless","$0.8","$20","30%","P2","中词扩量"),P("SP-Broad-手柄长尾","SP手动Broad","Broad","switch 2 controller with paddles | turbo controller switch","$0.5","$15","32%","P1","Broad发长尾(精准否锁大词)"),P("SP-Exact-卖点簇","SP手动Exact","Exact","hall effect joystick | back paddle controller | turbo | rgb controller","$0.7","$12","30%","P2","霍尔/背键/连发/RGB"),P("SD-竞品手柄定投","SD商品定投","ASIN定投","8bitdo/GameSir/NYXI 竞品ASIN","$0.6","$12","32%","P2","SD打竞品详情页"),P("SBV-手柄品牌簇","SBV视频","Exact","switch 2 controller","$1.0","$15","30%","P2","视频展示霍尔+握感"),P("SP-Exact-礼品词","SP手动Exact","Exact","gifts for gamers | switch gifts","$0.6","$10","32%","Q4","Q4礼品季")]
     if cat=="case": return [P("SP-Auto-卡盒捡词","SP-Auto自动","自动(4匹配)","系统自动匹配","$0.40","$15","30%","P1","起量+挖词"),P("SP-Exact-核心卡盒大词","SP手动Exact","Exact","switch 2 case | nintendo switch 2 case | switch 2 carrying case","$0.8","$20","28%","P1","核心词Exact卡位"),P("SP-Exact-中词扩量","SP手动Exact","Exact","switch 2 storage case | hard shell switch case | switch game holder","$0.6","$15","30%","P2","中词扩量"),P("SP-Broad-卡盒长尾","SP手动Broad","Broad","switch 2 travel case | slim case switch","$0.45","$12","32%","P1","Broad发长尾"),P("SP-Exact-卖点簇","SP手动Exact","Exact","hard shell switch 2 case | switch case 10 game","$0.55","$10","30%","P2","硬壳/卡槽/便携"),P("SD-竞品卡盒定投","SD商品定投","ASIN定投","tomtoc/Belkin 竞品ASIN","$0.5","$10","32%","P2","SD打竞品卡盒"),P("SBV-卡盒品牌簇","SBV视频","Exact","switch 2 case","$0.8","$12","30%","P2","展示卡槽+材质"),P("SP-Exact-礼品词","SP手动Exact","Exact","gifts for gamers | switch gifts","$0.5","$10","32%","Q4","Q4礼品季")]
     return [P("SP-Auto-dock捡词","SP-Auto自动","自动(4匹配)","系统自动匹配","$0.45","$20","28%","P1","起量+挖词"),P("SP-Exact-核心dock大词","SP手动Exact","Exact","switch 2 dock | nintendo switch 2 dock | switch 2 docking station","$1.2","$25","25%","P1","核心词Exact卡位"),P("SP-Exact-中词扩量","SP手动Exact","Exact","switch dock | switch 2 tv dock | switch 2 charging dock","$0.9","$20","28%","P2","中词扩量"),P("SP-Broad-dock长尾","SP手动Broad","Broad","switch 2 portable dock | switch oled dock","$0.5","$15","30%","P1","Broad发长尾"),P("SP-Exact-卖点簇","SP手动Exact","Exact","switch 2 dock with fan | switch 2 4k dock","$0.8","$12","28%","P2","散热/4K/充电"),P("SD-竞品dock定投","SD商品定投","ASIN定投","JSAUX/Genki 竞品ASIN","$0.6","$12","30%","P2","SD打竞品dock"),P("SBV-dock品牌簇","SBV视频","Exact","switch 2 dock","$1.0","$15","28%","P2","展示散热+4K"),P("SP-Exact-礼品词","SP手动Exact","Exact","gifts for gamers | switch gifts","$0.6","$10","32%","Q4","Q4礼品季")]
+def ads_tpl(cat,site="US",rows=None):
+    rows=rows or []
+    lst=_ads_tpl_base(cat,site,rows)
+    comp=local_comp_brands(rows)  # #翔宇: SD竞品定投用本站市场真实竞品(MX=PowerA/PDP/8bitdo)非美国硬编
+    if comp:
+        for p in lst:
+            if "竞品" in p["计划名"]: p["包含关键词"]="竞品ASIN定投·本站市场: "+" / ".join(comp)+" (取自本站词库竞品;具体ASIN见表1「竞品前十ASIN」列;运营可补市场畅销竞品)"
+    return lst
 def fill_234(app,t1,t2,t3,t5,t6,L,cat,site):
     supp=supported_machines(L["title"]+" "+" ".join(L["bullets"])+" "+L["desc"])
     tt=set(toks(L["title"])); bt=set()
