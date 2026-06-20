@@ -474,11 +474,14 @@ def fill_234(app,t1,t2,t3,t5,t6,L,cat,site):
     n5=0
     if not lall(app,t5):
         n5=batch(app,t5,[{"阶段":"P1 (0-30d)","阶段目标":"低SPR小词冲首页+核心品类词建联","关键KPI":"核心词进首页;Auto挖词反哺","农村是否生效":"观察中","下阶段触发条件":"核心词稳定P1"},{"阶段":"P2 (30-60d)","阶段目标":"大词排名爬升+中词扩量+补埋","关键KPI":"大词进前2页;簇收录率>50%","农村是否生效":"观察中","下阶段触发条件":"大词进前2页+ACoS可控"},{"阶段":"P3 (60d+)","阶段目标":"核心词进前10转防守+SD打竞品","关键KPI":"核心词稳定前10","农村是否生效":"观察中","下阶段触发条件":"前10稳定2周"}])
-    clear(app,t3); n3=batch(app,t3,ads_tpl(cat,site,rows,soft))
-    clear(app,t6); out=[]; seen=set()
+    ensure_site(app,t3); clear(app,t3,lambda f:f.get("站点")==site)  # per-site: 多站点app每站独立广告框架(本地语言词)
+    t3rows=ads_tpl(cat,site,rows,soft)
+    for p in t3rows: p["站点"]=site
+    n3=batch(app,t3,t3rows)
+    ensure_site(app,t6); clear(app,t6,lambda f:f.get("站点")==site); out=[]; seen=set()  # per-site 否定词
     def add(w,way,c,note):
         wl=w.strip().lower()
-        if wl and wl not in seen: seen.add(wl); out.append({"否定词":w.strip(),"否定方式":way,"类别":c,"状态":"待添加","应用范围":"全广告活动","备注":note})
+        if wl and wl not in seen: seen.add(wl); out.append({"否定词":w.strip(),"站点":site,"否定方式":way,"类别":c,"状态":"待添加","应用范围":"全广告活动","备注":note})
     for w in ["switch","nintendo switch","switch 2","nintendo switch 2","nintendo","switch oled","nintendo switch oled","switch lite","steam deck","steamdeck"]: add(w,"精准否定","大词/品牌/泛词","裸平台大词:只否精确,留Broad发长尾")
     for c in COLORS: add(c,"词组否定","颜色词","本品单色,其余颜色整片否(运营留自己色)")
     for w in PRICE: add(w,"词组否定","其他(配件/平台)","价格/二手意图")
