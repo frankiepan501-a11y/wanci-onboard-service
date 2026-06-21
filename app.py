@@ -161,9 +161,12 @@ def load_listing(d):
     def s1(v): return " ".join(str(x) for x in v if x) if isinstance(v,list) else (str(v) if v is not None else "")
     bl=g("bullet_point") or []
     if not isinstance(bl,list): bl=[bl]
-    su=info.get("summaries",[{}])
-    return {"title":s1(g("item_name")),"bullets":[b for b in bl if b],"desc":s1(g("product_description")),
-            "st":s1(g("generic_keyword")),"status":(su[0] if su else {}).get("status",[])}
+    su=info.get("summaries",[{}]); su0=su[0] if su else {}
+    authored=bool(s1(g("item_name")) or g("bullet_point") or g("product_description"))  # 我方是否自建文案(非跟卖/offer-only)
+    title=s1(g("item_name")) or (su0.get("itemName") or "")  # 标题兜底 summaries.itemName(跟卖记录文案只在summaries)
+    return {"title":title,"bullets":[b for b in bl if b],"desc":s1(g("product_description")),
+            "st":s1(g("generic_keyword")),"status":su0.get("status",[]),
+            "authored":authored,"has_record":bool(d.get("data"))}
 
 # 列位 & 报表解析 (与 import_seller_sprite 一致)
 REV={"kw":0,"nat":9,"ad":12,"vol":16,"spr":17,"buy":20,"demand":24,"ppc":28,"top10":30}
@@ -366,8 +369,12 @@ def make_html(product,site,asin,store,L,rows,cat):
     ugc_h="\n".join(f"<li><span class='kw'>{esc(r['kw'])}</span> <span class='tag p'>{esc(r['mx'])}</span> 出单 {int(r['ord']) if r['ord'] else 0} → 引导 Review/QA</li>" for r in missu[:12]) or "<li>（无）</li>"
     nlabel=lambda r:("拼写变体→广告可投·勿写listing" if is_misspell(r["kw"]) else esc(r["mx"])+"→疑噪")
     nz_h="\n".join(f"<tr><td class='kw' style='color:#8b94a3'>{esc(r['kw'])}</td><td><span class='tag n'>{nlabel(r)}</span></td><td class='num'>{('{:,}'.format(int(r['vol']))) if r['vol'] else '—'}</td></tr>" for r in nz[:15]) or "<tr><td colspan=3 style='color:#6b7280'>（无）</td></tr>"
-    if notext:
-        hb=f"""<div class="callout c-red"><h2 style="margin-top:0">🔴 领星未拉到该 listing 文案（标题/五点/描述/ST 全空）</h2><ul><li>状态 <strong>{esc('/'.join(L['status']) or '未知')}</strong> 无任何文案字段。</li><li>可能 listing 未建全 或 领星未同步,请运营核实后台。本次无法做埋词覆盖分析;下方「已收录」仍有效。</li></ul></div>"""
+    if not L.get("has_record",True):
+        hb=f"""<div class="callout c-yel"><h2 style="margin-top:0">🟡 跟卖 / 本店无自建 listing</h2><ul><li>该 seller_sku 在本店<strong>无 listing 记录</strong>（纯跟卖他人 ASIN 的 offer，或 sku 填错）。</li><li>无法编辑被跟卖 listing 的文案 → <strong>埋词需先自建独立 listing</strong>。下方「已收录」来自反查仍有效。</li></ul></div>"""
+    elif not L.get("authored",True):
+        hb=f"""<div class="callout c-yel"><h2 style="margin-top:0">🟡 跟卖 / 未自建文案</h2><ul><li>本店只挂 offer 匹配到已有 ASIN，标题《{esc(L['title'][:60])}》来自<strong>被跟卖 listing</strong>，我方<strong>未自建五点/描述/后台ST</strong>（attributes 无 item_name/bullet_point）。</li><li>→ 无法埋词；要埋词须<strong>自建独立 listing</strong>（或在拥有该 listing 文案的店铺操作）。非领星同步问题。</li></ul></div>"""
+    elif notext:
+        hb=f"""<div class="callout c-red"><h2 style="margin-top:0">🔴 listing 文案全空（标题/五点/描述/ST）</h2><ul><li>状态 <strong>{esc('/'.join(L['status']) or '未知')}</strong>。请运营核实后台 listing 是否建全。下方「已收录」仍有效。</li></ul></div>"""
     elif be or de or se or not buy:
         mp=[x for x,c in [("五点空",be),("描述空",de),("后台ST空",se),("非BUYABLE",not buy)] if c]
         hb=f"""<div class="callout c-red"><h2 style="margin-top:0">🔴 头号问题：listing 是「半成品」</h2><ul><li><strong>{esc(' / '.join(mp))}</strong></li><li>能埋词的层严重缺失 → 多数词无处收录,先补全文案/上架可售。</li></ul></div>"""
