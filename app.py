@@ -137,9 +137,12 @@ def is_misspell(k):
     kl=k.lower()
     return any(re.search(p,kl) for p in MISSPELL)
 EN_SITES={"US","CA","UK","AU"}  # 英语关键词站; 其余(MX/DE/FR/ES/IT/JP)广告计划走本地化骨架
+LAPTOP_DOCK=["laptop","notebook","macbook","thinkpad","ultrabook","ordinateur portable","portatile"," dell ","lenovo","macbook","thunderbolt","displayport","display port","kvm","lenkrad","steering wheel"," monitore","zwei monitor","two monitor","dual monitor","2 monitore","drei monitor","usb c hub","usb-c hub","hdmi splitter","docking station laptop","laptop docking","docking station hp","docking station dell"," hp dock","surface pro","ipad pro","monitor adapter","displayport vers","vers displayport","hdmi displayport"]
+def is_laptop_dock(k): kl=" "+k.lower()+" "; return any(s in kl for s in LAPTOP_DOCK)  # 笔记本/PC扩展坞≠Switch console dock(含docking station会命中dock锚点,必单独剔)
 def qualify_embed(kw,cat,supp,soft=False):
     k=kw.lower()
     if is_trademark(k) or is_misspell(k): return False  # 商标走UGC / 拼写变体只投广告不写listing
+    if is_laptop_dock(k): return False  # 笔记本/PC扩展坞噪音(hp/dell/macbook docking station等)
     if is_hard_platform(k): return False  # xbox/ps/steam 永剔
     if soft_platform_hit(k) and not soft: return False  # pc/手机: listing没声明支持则剔(R4)
     if is_pure_console(k) or is_ip(k): return False
@@ -372,7 +375,7 @@ def make_html(product,site,asin,store,L,rows,cat):
         return f"<tr><td class='kw'>{esc(r['kw'])}</td><td><span class='tag'>{esc(r['mx'])}</span></td><td class='num'>{v}</td><td class='num'>{o}</td></tr>"
     miss_h="\n".join(trow(r) for r in miss[:20])
     ugc_h="\n".join(f"<li><span class='kw'>{esc(r['kw'])}</span> <span class='tag p'>{esc(r['mx'])}</span> 出单 {int(r['ord']) if r['ord'] else 0} → 引导 Review/QA</li>" for r in missu[:12]) or "<li>（无）</li>"
-    nlabel=lambda r:("拼写变体→广告可投·勿写listing" if is_misspell(r["kw"]) else esc(r["mx"])+"→疑噪")
+    nlabel=lambda r:("拼写变体→广告可投·勿写listing" if is_misspell(r["kw"]) else ("笔记本/PC扩展坞→别品类剔" if is_laptop_dock(r["kw"]) else esc(r["mx"])+"→疑噪"))
     nz_h="\n".join(f"<tr><td class='kw' style='color:#8b94a3'>{esc(r['kw'])}</td><td><span class='tag n'>{nlabel(r)}</span></td><td class='num'>{('{:,}'.format(int(r['vol']))) if r['vol'] else '—'}</td></tr>" for r in nz[:15]) or "<tr><td colspan=3 style='color:#6b7280'>（无）</td></tr>"
     if not L.get("has_record",True):
         hb=f"""<div class="callout c-yel"><h2 style="margin-top:0">🟡 跟卖 / 本店无自建 listing</h2><ul><li>该 seller_sku 在本店<strong>无 listing 记录</strong>（纯跟卖他人 ASIN 的 offer，或 sku 填错）。</li><li>无法编辑被跟卖 listing 的文案 → <strong>埋词需先自建独立 listing</strong>。下方「已收录」来自反查仍有效。</li></ul></div>"""
