@@ -420,8 +420,8 @@ def local_comp_brands(rows,topn=8):
 def ads_tpl_local(cat,site,rows,soft=False):
     """#4 非英语站(MX/DE/FR/ES/IT/JP): 骨架+本站词库本地词, bid/预算留空运营按本地市场填。"""
     anchors=CAT_ANCHORS.get(cat,CAT_ANCHORS["dock"])
-    def ok(kl):  # 广告核心词: 排 拼写/IP/硬别平台/纯console/竞品(商标nintendo保留,ad可投); 且必须品类/机型相关(防"sing meinen song"类高搜noise)
-        if is_misspell(kl) or is_ip(kl) or is_hard_platform(kl) or is_pure_console(kl) or is_comp(kl): return False
+    def ok(kl):  # 广告核心词: 排 拼写/IP/硬别平台/笔记本dock/纯console/竞品(商标nintendo保留,ad可投); 且必须品类/机型相关(防"sing meinen song"类高搜noise)
+        if is_misspell(kl) or is_ip(kl) or is_hard_platform(kl) or is_laptop_dock(kl) or is_pure_console(kl) or is_comp(kl): return False
         if soft_platform_hit(kl) and not soft: return False  # pc/手机词: listing没声明支持才剔(R4)
         if any(a in kl for a in anchors): return True
         return is_machine_compat(kl)  # 纯机型词(nintendo switch 2)放行;跨品类(switch 2 controller 对dock)剔除
