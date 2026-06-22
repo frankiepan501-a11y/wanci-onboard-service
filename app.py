@@ -425,9 +425,9 @@ def ads_tpl_local(cat,site,rows,soft=False):
         if soft_platform_hit(kl) and not soft: return False  # pc/手机词: listing没声明支持才剔(R4)
         if any(a in kl for a in anchors): return True
         return is_machine_compat(kl)  # 纯机型词(nintendo switch 2)放行;跨品类(switch 2 controller 对dock)剔除
-    def pick(n,pred=None):
+    def pick(n,pred=None,tier=None):
         c=[(float(ext(f.get("月搜索量")) or 0)+float(ext(f.get("已出单单量")) or 0)*5000, ext(f.get("关键词"))) for f in rows
-           if f.get("矩阵")=="意图词" and ext(f.get("关键词")) and ok(ext(f.get("关键词")).lower()) and (pred is None or pred(ext(f.get("关键词")).lower()))]
+           if f.get("矩阵")=="意图词" and ext(f.get("关键词")) and ok(ext(f.get("关键词")).lower()) and (pred is None or pred(ext(f.get("关键词")).lower())) and (tier is None or f.get("词级")==tier)]
         c.sort(reverse=True); seen=set(); o=[]
         for _,w in c:
             if w.lower() in seen: continue
@@ -437,18 +437,22 @@ def ads_tpl_local(cat,site,rows,soft=False):
     SELL=["hall","turbo","nfc","rgb","paddle","gatillo","4k","fan","ventilador","cooling","60hz","hdmi","ladestation"]
     GIFTL=["regalo","cadeau","geschenk","regalo gamer","weihnacht"]
     NF="待运营填(本地市场)"
-    core=pick(4) or "(从本站词库选本地核心词)"; mid=pick(4) or core
+    # 林明坚反馈(2026-06-22): 按表1「词级」分桶,大词→核心大词Exact / 中词→中词扩量Exact / 小词→Broad长尾,每词只进对应层级计划(不再三层用同一批core词)。空桶给占位不回退复制。
+    core=pick(4,tier="大词") or "(本站词库暂无大词级核心词,运营按本地市场补)"
+    mid=pick(4,tier="中词") or "(本站词库暂无中词级词,运营补)"
+    longt=pick(6,tier="小词") or "(本站词库暂无小词/长尾词,运营补)"
+    sbv=pick(2,tier="大词") or "(本站大词级核心词)"
     wb=lambda terms:(lambda k:any(re.search(r'\b'+re.escape(s)+r'\b',k) for s in terms))  # 词边界,防 fan 命中 fantasy
     sell=pick(4,wb(SELL)) or "(本站卖点词)"
     gift=pick(3,wb(GIFTL)) or "(本站礼品词:regalo/geschenk/cadeau)"
     R=lambda w:w+" · 非英语站:词从本站词库选,bid 本地市场待运营定"
     return [P(f"SP-Auto-捡词({site})","SP-Auto自动","自动(4匹配)","系统自动匹配",NF,NF,NF,"P1",R("起量挖本地搜索词")),
-            P(f"SP-Exact-核心大词({site})","SP手动Exact","Exact",core,NF,NF,NF,"P1",R("本站核心词Exact卡位")),
-            P(f"SP-Exact-中词扩量({site})","SP手动Exact","Exact",mid,NF,NF,NF,"P2",R("本站中词扩量")),
-            P(f"SP-Broad-长尾({site})","SP手动Broad","Broad",core,NF,NF,NF,"P1",R("Broad发本地长尾")),
+            P(f"SP-Exact-核心大词({site})","SP手动Exact","Exact",core,NF,NF,NF,"P1",R("本站大词级核心词Exact卡位(词级=大词)")),
+            P(f"SP-Exact-中词扩量({site})","SP手动Exact","Exact",mid,NF,NF,NF,"P2",R("本站中词级扩量(词级=中词)")),
+            P(f"SP-Broad-长尾({site})","SP手动Broad","Broad",longt,NF,NF,NF,"P1",R("Broad发本站小词/长尾(词级=小词)")),
             P(f"SP-Exact-卖点簇({site})","SP手动Exact","Exact",sell,NF,NF,NF,"P2",R("本站卖点词")),
             P(f"SD-竞品定投({site})","SD商品定投","ASIN定投","本站竞品ASIN(按本地市场选)",NF,NF,NF,"P2",R("SD打本地竞品")),
-            P(f"SBV-品牌簇({site})","SBV视频","Exact",core,NF,NF,NF,"P2",R("视频展示")),
+            P(f"SBV-品牌簇({site})","SBV视频","Exact",sbv,NF,NF,NF,"P2",R("视频展示(大词级)")),
             P(f"SP-Exact-礼品({site})","SP手动Exact","Exact",gift,NF,NF,NF,"Q4",R("Q4礼品季"))]
 def _ads_tpl_base(cat,site,rows,soft=False):
     if site not in EN_SITES: return ads_tpl_local(cat,site,rows,soft)
