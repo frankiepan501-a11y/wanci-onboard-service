@@ -650,8 +650,38 @@ def _arrow(d):
     if d<0: return f"<font color='red'>↓{abs(d)}</font>"
     return "持平"
 
+def store_ad_map(sid):
+    """{asin:[campaign dicts含state]} 该店各ASIN的SP活动。"""
+    try:
+        ads=lx("/pb/openapi/newad/spProductAds",{"sid":sid,"offset":0,"length":500}).get("data") or []
+        camps={str(c.get("campaign_id")):c for c in (lx("/pb/openapi/newad/spCampaigns",{"sid":sid,"offset":0,"length":500}).get("data") or [])}
+        m={}
+        for a in ads:
+            if a.get("asin"): m.setdefault(a["asin"],set()).add(str(a.get("campaign_id")))
+        return {asin:[camps.get(c,{"state":"?","name":"?"}) for c in cids] for asin,cids in m.items()}
+    except Exception: return {}
+def store_listing_meta(sid):
+    """{asin:{bsr,fba,thirty}} BSR(seller_rank)+FBA可售(afn_fulfillable)+30天销量(mws/listing分页cap2000)。"""
+    out={}; off=0
+    try:
+        while off<2000:
+            d=lx("/erp/sc/data/mws/listing",{"sid":sid,"length":200,"offset":off}).get("data") or []
+            for it in d:
+                a=it.get("asin")
+                if a and a not in out: out[a]={"bsr":it.get("seller_rank"),"fba":it.get("afn_fulfillable_quantity"),"thirty":it.get("thirty_volume")}
+            if len(d)<200: break
+            off+=len(d)
+    except Exception: pass
+    return out
 def do_review(frankie_only=False,dry=False):
     day=time.strftime("%Y-%m-%d")
+    _adc={}; _metac={}
+    def admap(sid):
+        if sid not in _adc: _adc[sid]=store_ad_map(sid)
+        return _adc[sid]
+    def metam(sid):
+        if sid not in _metac: _metac[sid]=store_listing_meta(sid)
+        return _metac[sid]
     reg=[r for r in lall(REG_APP,REG_TB) if r["fields"].get("状态") in ("在跑","筹备")]
     snaps=lall(REG_APP,SNAP_TB)
     prev={}
@@ -673,22 +703,33 @@ def do_review(frankie_only=False,dry=False):
             L=load_listing(lr)
             rows=[x["fields"] for x in lall(app2,t1) if x["fields"].get("站点")==site]
             m=compute_audit(L,rows,cat)
+            meta=metam(sid).get(asin,{}); camps=admap(sid).get(asin,[])
+            bsr=meta.get("bsr"); fba=meta.get("fba"); thirty=meta.get("thirty")
+            running=[c for c in camps if c.get("state")=="enabled"]
+            instock=isinstance(fba,(int,float)) and fba>=10; ranked=isinstance(bsr,(int,float)) and bsr>0
+            derelict=instock and ranked and len(running)==0  # 有货+有BSR排名+0广告在跑=疑似运营失职(未及时维护广告)
             if not dry:
                 try:
                     tm={x["name"]:x["table_id"] for x in api("GET",f"/bitable/v1/apps/{app2}/tables?page_size=100")["data"]["items"]}
                     refresh_t2(app2,t1,tm["表2·Listing埋词审计"],L,cat,site)
                 except Exception: pass
             pv=prev.get((asin,site),(0,{}))[1]
+            def _pn(v):
+                try: return float(v or 0)
+                except Exception: return 0.0
             if pv:
-                d_cov=m["cover_pct"]-(pv.get("埋词覆盖率") or 0); d_rec=m["recorded"]-(pv.get("已收录") or 0); d_p1=m["p1"]-(pv.get("首页") or 0)
+                d_cov=m["cover_pct"]-_pn(pv.get("埋词覆盖率")); d_rec=m["recorded"]-_pn(pv.get("已收录")); d_p1=m["p1"]-_pn(pv.get("首页"))
             else: d_cov=d_rec=d_p1=0
             res={"product":product,"site":site,"region":region,"op":op,"asin":asin,"haverank":haverank,
-                 "m":m,"first":not pv,"d_cov":d_cov,"d_rec":d_rec,"d_p1":d_p1}
+                 "m":m,"first":not pv,"d_cov":d_cov,"d_rec":d_rec,"d_p1":d_p1,
+                 "bsr":bsr,"fba":fba,"thirty":thirty,"ncamp":len(camps),"nrun":len(running),"derelict":derelict}
             per_op.setdefault(op,[]).append(res)
             new_snap.append({"快照键":f"{asin}-{site}-{now}","产品":product,"站点":site,"ASIN":asin,"区域":region,"负责运营":op,
                 "候选数":m["total"],"已收录":m["recorded"],"首页":m["p1"],"2-3页":m["p23"],"靠后":m["deep"],"已埋":m["embedded"],
                 "埋词覆盖率":m["cover_pct"],"合适词":m["fit"],"埋词覆盖Δ":d_cov,"收录Δ":d_rec,"首页Δ":d_p1,
-                "listing状态":m["status"],"有rank追踪":"是" if haverank else "否","快照时间":now})
+                "listing状态":m["status"],"有rank追踪":"是" if haverank else "否","快照时间":now,
+                "BSR":bsr if ranked else None,"FBA可售":fba if isinstance(fba,(int,float)) else None,
+                "广告活动":len(camps),"广告在跑":len(running),"失职":"是" if derelict else "否"})
         except Exception as e:
             errors.append(f"{product}-{site}:{str(e)[:80]}")
     if new_snap and not dry: batch(REG_APP,SNAP_TB,new_snap)
@@ -705,7 +746,9 @@ def do_review(frankie_only=False,dry=False):
                 elif not it["haverank"]: lines.append("  ⚪ 收录追踪未铺开(以埋词覆盖率为准)")
                 if m["miss"]: lines.append("  📌 漏埋高价值: "+" / ".join(x["kw"] for x in m["miss"][:4]))
                 if not it["first"] and it["d_cov"]<0: lines.append("  ⚠️ 埋词覆盖**退步**,核对是否改 listing 改丢了词")
-            md=f"**{day} 万词周自检** · 你负责 {len(items)} 个作战台\n\n"+"\n".join(lines)+"\n\n> 详情开作战台表2;改 listing 是你的活,系统只审不改。"
+                if it.get("derelict"): lines.append(f"  🔴 **失职信号**: 有货(FBA可售{it['fba']})+BSR#{it['bsr']} 但 **0 广告在跑**({it['ncamp']}个活动全停/无) → 立即开/恢复广告")
+                elif it.get("nrun",0)>0: lines.append(f"  📣 广告 {it['nrun']}个在跑/共{it['ncamp']}个 · FBA可售{it['fba']} · BSR#{it['bsr']} · 30天销量{it.get('thirty')}")
+            md=f"**{day} 万词周自检** · 你负责 {len(items)} 个作战台\n\n"+"\n".join(lines)+"\n\n> 详情开作战台表2;改 listing/开广告 是你的活,系统只审不改。"
             im_card(oid,f"🟡 [AMZ·P2] 万词周自检 · {op}",md,"orange")
     # Frankie 总digest
     foid=OP_OID.get("潘志聪")
@@ -715,11 +758,14 @@ def do_review(frankie_only=False,dry=False):
         stuck=[x for x in allr if x["m"]["status"]!="正常" or (not x["first"] and x["d_cov"]<0)]
         L1=[f"✅ {x['product']} {x['site']}: 覆盖{_arrow(x['d_cov'])} 收录{_arrow(x['d_rec'])}" for x in improved] or ["（本周无明显改善）"]
         L2=[f"🔴 {x['product']} {x['site']}: "+("listing "+x['m']['status'] if x['m']['status']!='正常' else f"埋词覆盖退步{_arrow(x['d_cov'])}")+f" — 催 {x['op']}" for x in stuck] or ["（无卡住）"]
+        derel=[x for x in allr if x.get("derelict")]
+        L4=[f"🔴 {x['product']} {x['site']}: FBA可售{x['fba']}有货+BSR#{x['bsr']} 但0广告在跑 — 催 {x['op']}" for x in derel] or ["（无）"]
         base="(首轮=建立基线,delta 下周起有效)" if all(x["first"] for x in allr) else ""
         md=(f"**{day} 万词周自检总览** · {len(allr)}个作战台 {base}\n\n"
-            f"**📈 改善 {len(improved)}**\n"+"\n".join(L1)+f"\n\n**🚨 卡住该催 {len(stuck)}**\n"+"\n".join(L2)
+            f"**🔴 运营失职·有货有排名却0广告在跑 {len(derel)}**\n"+"\n".join(L4)
+            +f"\n\n**📈 埋词改善 {len(improved)}**\n"+"\n".join(L1)+f"\n\n**🚨 listing卡住该催 {len(stuck)}**\n"+"\n".join(L2)
             +(f"\n\n**⚠️ 异常 {len(errors)}**: "+" / ".join(errors[:8]) if errors else "")
-            +"\n\n> 收录 delta 仅 US 2 品有效(其余 rank 追踪未铺开,看埋词覆盖)。")
+            +"\n\n> 失职=可售≥10+有BSR+0广告在跑(豁免:断货/非BUYABLE)。收录 delta 仅 US 2 品有效。")
         im_card(foid,f"🟡 [AMZ·P2] 万词周自检总览 · {day}",md,"blue")
     return {"ok":True,"reviewed":len(per_op),"snap":len(new_snap),"errors":errors}
 
