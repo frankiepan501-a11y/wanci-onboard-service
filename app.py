@@ -426,9 +426,9 @@ def ads_tpl_local(cat,site,rows,soft=False,supp=None):
         if supp and incompatible_machine(kl,supp): return False  # 不兼容机型(本品不支持的 switch 1/lite 等)整片剔(2026-06-22 翔宇/明坚反馈)
         if any(a in kl for a in anchors): return True
         return is_machine_compat(kl)  # 纯机型词(nintendo switch 2)放行;跨品类(switch 2 controller 对dock)剔除
-    def pick(n,pred=None,tier=None):
+    def pick(n,pred=None,tier=None,excl_bare=False):
         c=[(float(ext(f.get("月搜索量")) or 0)+float(ext(f.get("已出单单量")) or 0)*5000, ext(f.get("关键词"))) for f in rows
-           if f.get("矩阵")=="意图词" and ext(f.get("关键词")) and ok(ext(f.get("关键词")).lower()) and (pred is None or pred(ext(f.get("关键词")).lower())) and (tier is None or f.get("词级")==tier)]
+           if f.get("矩阵")=="意图词" and ext(f.get("关键词")) and ok(ext(f.get("关键词")).lower()) and (pred is None or pred(ext(f.get("关键词")).lower())) and (tier is None or f.get("词级")==tier) and not (excl_bare and ext(f.get("关键词")).strip().lower() in anchors)]
         c.sort(reverse=True); seen=set(); o=[]
         for _,w in c:
             if w.lower() in seen: continue
@@ -440,13 +440,13 @@ def ads_tpl_local(cat,site,rows,soft=False,supp=None):
     NF="待运营填(本地市场)"
     # 林明坚反馈(2026-06-22): 按表1「词级」分桶,大词→核心大词Exact / 中词→中词扩量Exact / 小词→Broad长尾,每词只进对应层级计划(不再三层用同一批core词)。空桶给占位不回退复制。
     core=pick(4,tier="大词") or "(本站词库暂无大词级核心词,运营按本地市场补)"
-    mid=pick(4,tier="中词") or "(本站词库暂无中词级词,运营补)"
-    longt=pick(6,tier="小词") or "(本站词库暂无小词/长尾词,运营补)"
+    mid=pick(4,tier="中词",excl_bare=True) or "(本站词库暂无中词级词,运营补)"   # 明坚反馈: Broad排裸锚词(controller/manette单独)防过泛烧预算,裸词只留Exact/Auto
+    longt=pick(6,tier="小词",excl_bare=True) or "(本站词库暂无小词/长尾词,运营补)"
     sbv=pick(2,tier="大词") or "(本站大词级核心词)"
     wb=lambda terms:(lambda k:any(re.search(r'\b'+re.escape(s)+r'\b',k) for s in terms))  # 词边界,防 fan 命中 fantasy
     sell=pick(4,wb(SELL)) or "(本站卖点词)"
     gift=pick(3,wb(GIFTL)) or "(本站礼品词:regalo/geschenk/cadeau)"
-    R=lambda w:w+" · 非英语站:词从本站词库选,bid 本地市场待运营定"
+    R=lambda w:w+" · 词从本站词库按词级选,bid 待运营按本地市场定"
     return [P(f"SP-Auto-捡词({site})","SP-Auto自动","自动(4匹配)","系统自动匹配",NF,NF,NF,"P1",R("起量挖本地搜索词")),
             P(f"SP-Exact-核心大词({site})","SP手动Exact","Exact",core,NF,NF,NF,"P1",R("本站大词级核心词Exact卡位(词级=大词)")),
             P(f"SP-Broad-中词扩量({site})","SP手动Broad","Broad",mid,NF,NF,NF,"P2",R("本站中词级走Broad扩覆盖(词级=中词,量偏低开Broad不开Exact)")),
@@ -456,7 +456,7 @@ def ads_tpl_local(cat,site,rows,soft=False,supp=None):
             P(f"SBV-品牌簇({site})","SBV视频","Exact",sbv,NF,NF,NF,"P2",R("视频展示(大词级)")),
             P(f"SP-Exact-礼品({site})","SP手动Exact","Exact",gift,NF,NF,NF,"Q4",R("Q4礼品季"))]
 def _ads_tpl_base(cat,site,rows,soft=False,supp=None):
-    if site not in EN_SITES: return ads_tpl_local(cat,site,rows,soft,supp)
+    if site!="US": return ads_tpl_local(cat,site,rows,soft,supp)  # 仅US走硬编手调模板;UK/CA/AU+非英语站全走数据驱动词级分桶(2026-06-22 统一,明坚反馈英语站卡盒仍Exact)
     if cat=="controller": return [P("SP-Auto-手柄捡词","SP-Auto自动","自动(4匹配)","系统自动匹配","$0.45","$20","30%","P1","起量+挖搜索词;低bid捡漏"),P("SP-Exact-核心手柄大词","SP手动Exact","Exact","switch 2 controller | nintendo switch 2 controller | switch 2 pro controller","$1.0","$25","28%","P1","核心词Exact卡位"),P("SP-Exact-中词扩量","SP手动Exact","Exact","hall effect controller | switch controller wireless","$0.8","$20","30%","P2","中词扩量"),P("SP-Broad-手柄长尾","SP手动Broad","Broad","switch 2 controller with paddles | turbo controller switch","$0.5","$15","32%","P1","Broad发长尾(精准否锁大词)"),P("SP-Exact-卖点簇","SP手动Exact","Exact","hall effect joystick | back paddle controller | turbo | rgb controller","$0.7","$12","30%","P2","霍尔/背键/连发/RGB"),P("SD-竞品手柄定投","SD商品定投","ASIN定投","8bitdo/GameSir/NYXI 竞品ASIN","$0.6","$12","32%","P2","SD打竞品详情页"),P("SBV-手柄品牌簇","SBV视频","Exact","switch 2 controller","$1.0","$15","30%","P2","视频展示霍尔+握感"),P("SP-Exact-礼品词","SP手动Exact","Exact","gifts for gamers | switch gifts","$0.6","$10","32%","Q4","Q4礼品季")]
     if cat=="case": return [P("SP-Auto-卡盒捡词","SP-Auto自动","自动(4匹配)","系统自动匹配","$0.40","$15","30%","P1","起量+挖词"),P("SP-Exact-核心卡盒大词","SP手动Exact","Exact","switch 2 case | nintendo switch 2 case | switch 2 carrying case","$0.8","$20","28%","P1","核心词Exact卡位"),P("SP-Exact-中词扩量","SP手动Exact","Exact","switch 2 storage case | hard shell switch case | switch game holder","$0.6","$15","30%","P2","中词扩量"),P("SP-Broad-卡盒长尾","SP手动Broad","Broad","switch 2 travel case | slim case switch","$0.45","$12","32%","P1","Broad发长尾"),P("SP-Exact-卖点簇","SP手动Exact","Exact","hard shell switch 2 case | switch case 10 game","$0.55","$10","30%","P2","硬壳/卡槽/便携"),P("SD-竞品卡盒定投","SD商品定投","ASIN定投","tomtoc/Belkin 竞品ASIN","$0.5","$10","32%","P2","SD打竞品卡盒"),P("SBV-卡盒品牌簇","SBV视频","Exact","switch 2 case","$0.8","$12","30%","P2","展示卡槽+材质"),P("SP-Exact-礼品词","SP手动Exact","Exact","gifts for gamers | switch gifts","$0.5","$10","32%","Q4","Q4礼品季")]
     return [P("SP-Auto-dock捡词","SP-Auto自动","自动(4匹配)","系统自动匹配","$0.45","$20","28%","P1","起量+挖词"),P("SP-Exact-核心dock大词","SP手动Exact","Exact","switch 2 dock | nintendo switch 2 dock | switch 2 docking station","$1.2","$25","25%","P1","核心词Exact卡位"),P("SP-Exact-中词扩量","SP手动Exact","Exact","switch dock | switch 2 tv dock | switch 2 charging dock","$0.9","$20","28%","P2","中词扩量"),P("SP-Broad-dock长尾","SP手动Broad","Broad","switch 2 portable dock | switch oled dock","$0.5","$15","30%","P1","Broad发长尾"),P("SP-Exact-卖点簇","SP手动Exact","Exact","switch 2 dock with fan | switch 2 4k dock","$0.8","$12","28%","P2","散热/4K/充电"),P("SD-竞品dock定投","SD商品定投","ASIN定投","JSAUX/Genki 竞品ASIN","$0.6","$12","30%","P2","SD打竞品dock"),P("SBV-dock品牌簇","SBV视频","Exact","switch 2 dock","$1.0","$15","28%","P2","展示散热+4K"),P("SP-Exact-礼品词","SP手动Exact","Exact","gifts for gamers | switch gifts","$0.6","$10","32%","Q4","Q4礼品季")]
