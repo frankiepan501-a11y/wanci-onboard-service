@@ -14,6 +14,11 @@ REG_TB=os.environ.get("WANCI_REG_TB","tbl2g78DcPnxWNwO")
 APPLY_TB=os.environ.get("WANCI_APPLY_TB","tblPXS4uO8lK9p5g")
 RANK_BASE=os.environ.get("WANCI_RANK_BASE","EEKNbZ8b8aqv6msOaTscotBDn5f")
 SNAP_TB=os.environ.get("WANCI_SNAP_TB","tbl3OipVxS8wyjKk")  # 万词周快照表(总台App内)
+TARGET_ACOS=float(os.environ.get("WANCI_TARGET_ACOS","35"))  # 目标ACoS%(默认35,低于食人花dock~40盈亏平衡;判提预算/优化的阈值)
+def ad_verdict(acos,sal):
+    """广告表现判定(供"是否值得提预算"):盈利(ACoS≤target)=健康;否则需优化。"""
+    if sal<=0: return "无成交"
+    return "健康" if (acos and acos<=TARGET_ACOS) else "ACoS偏高"
 AUTH_TOKEN=os.environ.get("ONBOARD_TOKEN","")
 FRANKIE_OID="ou_629ce01f4bc31de078e10fcb038dbf78"
 BASE="https://open.feishu.cn/open-apis"
@@ -732,6 +737,12 @@ def do_review(frankie_only=False,dry=False):
             budget_alert=instock and ranked and len(enabled)>0 and len(serving)==0  # 开了但0在投(预算耗尽等)≠失职,催提预算
             impr=perf.get("impr",0); clk=perf.get("clicks",0); cost=round(perf.get("cost",0.0),2); ords=perf.get("orders",0); sal=perf.get("sales",0.0)
             ctr=round(100.0*clk/impr,2) if impr else 0; cvr=round(100.0*ords/clk,1) if clk else 0; acos=round(100.0*cost/sal,1) if sal else 0
+            perf_v=ad_verdict(acos,sal)  # 健康/ACoS偏高/无成交 — 供"是否值得提预算"
+            if budget_alert:
+                budget_advice=("✅值得提预算(ACoS"+str(acos)+"%健康,预算限了放量)" if perf_v=="健康"
+                    else ("⚠️别盲目提预算·先优化(ACoS"+str(acos)+"%偏高,CTR"+str(ctr)+"%/CVR"+str(cvr)+"%) → 降bid/加否词/改listing" if perf_v=="ACoS偏高"
+                    else "数据不足(近7天无成交),先观察/查广告相关性"))
+            else: budget_advice=""
             if not dry:
                 try:
                     tm={x["name"]:x["table_id"] for x in api("GET",f"/bitable/v1/apps/{app2}/tables?page_size=100")["data"]["items"]}
@@ -747,7 +758,7 @@ def do_review(frankie_only=False,dry=False):
             res={"product":product,"site":site,"region":region,"op":op,"asin":asin,"haverank":haverank,
                  "m":m,"first":not pv,"d_cov":d_cov,"d_rec":d_rec,"d_p1":d_p1,
                  "bsr":bsr,"fba":fba,"thirty":thirty,"ncamp":len(camps),"nen":len(enabled),"nrun":len(serving),"noob":len(oob),
-                 "derelict":derelict,"budget_alert":budget_alert,"cost":cost,"acos":acos,"ctr":ctr,"cvr":cvr}
+                 "derelict":derelict,"budget_alert":budget_alert,"cost":cost,"acos":acos,"ctr":ctr,"cvr":cvr,"perf_v":perf_v,"budget_advice":budget_advice}
             per_op.setdefault(op,[]).append(res)
             new_snap.append({"快照键":f"{asin}-{site}-{now}","产品":product,"站点":site,"ASIN":asin,"区域":region,"负责运营":op,
                 "候选数":m["total"],"已收录":m["recorded"],"首页":m["p1"],"2-3页":m["p23"],"靠后":m["deep"],"已埋":m["embedded"],
@@ -773,8 +784,10 @@ def do_review(frankie_only=False,dry=False):
                 if m["miss"]: lines.append("  📌 漏埋高价值: "+" / ".join(x["kw"] for x in m["miss"][:4]))
                 if not it["first"] and it["d_cov"]<0: lines.append("  ⚠️ 埋词覆盖**退步**,核对是否改 listing 改丢了词")
                 if it.get("derelict"): lines.append(f"  🔴 **失职**: 有货(FBA{it['fba']})+BSR#{it['bsr']} 但 **0个广告开启**({it['ncamp']}活动全暂停/无) → 立即开广告")
-                elif it.get("budget_alert"): lines.append(f"  🟠 **预算耗尽**: {it['nen']}个活动开着但0在投(预算超{it['noob']}个) → 提预算/查为何不投")
-                elif it.get("nrun",0)>0: lines.append(f"  📣 广告{it['nrun']}在投/{it['ncamp']}活动 · 7天花${it['cost']} ACoS{it['acos']}% CTR{it['ctr']}% CVR{it['cvr']}% · FBA{it['fba']} BSR#{it['bsr']}")
+                elif it.get("budget_alert"): lines.append(f"  🟠 **预算耗尽**: {it['nen']}活动开着但0在投(预算超{it['noob']}) → {it['budget_advice']}")
+                elif it.get("nrun",0)>0:
+                    pv=it.get("perf_v"); tail=("· 表现健康" if pv=="健康" else (f"· **ACoS偏高该优化**(降bid/加否词/改listing)" if pv=="ACoS偏高" else "· 近7天无成交,查相关性"))
+                    lines.append(f"  {'📣' if pv=='健康' else '⚠️'} 广告{it['nrun']}在投 · 7天花${it['cost']} ACoS{it['acos']}% CTR{it['ctr']}% CVR{it['cvr']}% {tail} · FBA{it['fba']} BSR#{it['bsr']}")
             md=f"**{day} 万词周自检** · 你负责 {len(items)} 个作战台\n\n"+"\n".join(lines)+"\n\n> 详情开作战台表2;改 listing/开广告 是你的活,系统只审不改。"
             im_card(oid,f"🟡 [AMZ·P2] 万词周自检 · {op}",md,"orange")
     # Frankie 总digest
@@ -787,14 +800,14 @@ def do_review(frankie_only=False,dry=False):
         L2=[f"🔴 {x['product']} {x['site']}: "+("listing "+x['m']['status'] if x['m']['status']!='正常' else f"埋词覆盖退步{_arrow(x['d_cov'])}")+f" — 催 {x['op']}" for x in stuck] or ["（无卡住）"]
         derel=[x for x in allr if x.get("derelict")]; budg=[x for x in allr if x.get("budget_alert")]
         L4=[f"🔴 {x['product']} {x['site']}: FBA{x['fba']}有货+BSR#{x['bsr']} 但0个广告开启 — 催 {x['op']}" for x in derel] or ["（无）"]
-        L5=[f"🟠 {x['product']} {x['site']}: {x['nen']}活动开着但0在投(预算超{x['noob']}) — {x['op']}提预算" for x in budg] or ["（无）"]
+        L5=[f"🟠 {x['product']} {x['site']}(预算超{x['noob']}): {x['budget_advice']} — {x['op']}" for x in budg] or ["（无）"]
         base="(首轮=建立基线,delta 下周起有效)" if all(x["first"] for x in allr) else ""
         md=(f"**{day} 万词周自检总览** · {len(allr)}个作战台 {base}\n\n"
             f"**🔴 运营失职·有货有排名却0广告开启 {len(derel)}**\n"+"\n".join(L4)
             +f"\n\n**🟠 预算耗尽·开了但0在投 {len(budg)}**\n"+"\n".join(L5)
             +f"\n\n**📈 埋词改善 {len(improved)}**\n"+"\n".join(L1)+f"\n\n**🚨 listing卡住 {len(stuck)}**\n"+"\n".join(L2)
             +(f"\n\n**⚠️ 异常 {len(errors)}**: "+" / ".join(errors[:8]) if errors else "")
-            +"\n\n> 失职=可售≥10+有BSR+0个enabled活动(全暂停);预算耗尽=开了但全OUT_OF_BUDGET;均豁免断货/非BUYABLE。判定用持久state不受dayparting/查询时点影响。")
+            +f"\n\n> 失职=可售≥10+有BSR+0个enabled活动(全暂停);预算耗尽=开了但全OUT_OF_BUDGET。**预算建议按ACoS表现**:ACoS≤{int(TARGET_ACOS)}%健康才提预算放量,ACoS高/无成交→先优化勿烧钱。判定用持久state不受dayparting/查询时点影响;均豁免断货/非BUYABLE。")
         im_card(foid,f"🟡 [AMZ·P2] 万词周自检总览 · {day}",md,"blue")
     return {"ok":True,"reviewed":len(per_op),"snap":len(new_snap),"errors":errors}
 
