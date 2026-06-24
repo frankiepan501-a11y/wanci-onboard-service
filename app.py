@@ -153,7 +153,7 @@ def is_laptop_dock(k): kl=" "+k.lower()+" "; return any(s in kl for s in LAPTOP_
 # 跨品类噪音(林明坚 2026-06-23: joystick avion=法语飞机摇杆): 含 joystick/manette/control 锚点但其实是别产品(飞行摇杆/赛车方向盘/街机摇杆)
 CROSS_NOISE=["avion","aereo","aircraft","airplane","flight stick","flightstick"," flight "," flying "," plane "," rc "," drone ","volant","steering wheel","racing wheel"," lenkrad "," yoke "," throttle ","hotas","arcade stick"," fight stick","fightstick","joystick arcade"]
 def is_cross_noise(k): kl=" "+k.lower()+" "; return any(n in kl for n in CROSS_NOISE)
-def qualify_embed(kw,cat,supp,soft=False):
+def qualify_embed(kw,cat,supp,soft=False,attrs=None):
     k=kw.lower()
     if is_trademark(k) or is_misspell(k): return False  # 商标走UGC / 拼写变体只投广告不写listing
     if is_laptop_dock(k) or is_cross_noise(k): return False  # 笔记本dock + 跨品类(飞行摇杆/方向盘)噪音
@@ -161,6 +161,11 @@ def qualify_embed(kw,cat,supp,soft=False):
     if soft_platform_hit(k) and not soft: return False  # pc/手机: listing没声明支持则剔(R4)
     if is_pure_console(k) or is_ip(k): return False
     if incompatible_machine(k,supp): return False
+    A=attrs or {}  # 黄奕纯 2026-06-24 属性不匹配剔(与广告侧 ads_tpl_local.ok 一致): 颜色长尾整片排/wired给无线品/handheld给Pro手柄
+    _kws=set(re.findall(r"[a-z0-9]+",k))
+    if _kws & set(COLORS): return False
+    if A.get("wireless") and "wired" in _kws: return False
+    if cat=="controller" and not A.get("handheld_self") and "handheld" in _kws: return False
     if is_machine_compat(k): return True
     return any(a in k for a in CAT_ANCHORS.get(cat,CAT_ANCHORS["dock"]))
 def agg_roots(items):
@@ -362,6 +367,7 @@ def clone_app(name):
 def esc(s): return str(s).replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
 def make_html(product,site,asin,store,L,rows,cat):
     supp=supported_machines(L["title"]+" "+" ".join(L["bullets"])+" "+L["desc"],cat); soft=supports_soft(L["title"]+" "+" ".join(L["bullets"])+" "+L["desc"]+" "+L["st"])
+    _qa=listing_attrs(L)
     tt=set(toks(L["title"])); bt=set()
     for b in L["bullets"]: bt|=set(toks(b))
     dt=set(toks(L["desc"])); st=set(toks(L["st"])); front=tt|bt|dt
@@ -370,7 +376,7 @@ def make_html(product,site,asin,store,L,rows,cat):
     for r in rows:
         f=r["fields"]; kw=ext(f.get("关键词"))
         R.append({"kw":kw,"mx":f.get("矩阵"),"vol":float(ext(f.get("月搜索量")) or 0),"ord":float(ext(f.get("已出单单量")) or 0),
-                  "rank":float(ext(f.get("我方自然排名")) or 0),"front":cov(kw,front),"instr":cov(kw,st),"qual":qualify_embed(kw,cat,supp,soft)})
+                  "rank":float(ext(f.get("我方自然排名")) or 0),"front":cov(kw,front),"instr":cov(kw,st),"qual":qualify_embed(kw,cat,supp,soft,_qa)})
     total=len(R); embedded=sum(1 for r in R if r["front"] or r["instr"])
     rk=[r for r in R if r["rank"]>0]; p1=[r for r in rk if r["rank"]<=16]; p23=[r for r in rk if 16<r["rank"]<=48]; deep=[r for r in rk if r["rank"]>48]
     sens=lambda r: r["mx"] in ("IP词","品牌词-竞品") or is_ip(r["kw"]) or is_comp(r["kw"]) or is_trademark(r["kw"])
@@ -518,6 +524,7 @@ def ads_tpl(cat,site="US",rows=None,soft=False,supp=None,attrs=None):
     return lst
 def fill_234(app,t1,t2,t3,t5,t6,L,cat,site):
     supp=supported_machines(L["title"]+" "+" ".join(L["bullets"])+" "+L["desc"],cat); soft=supports_soft(L["title"]+" "+" ".join(L["bullets"])+" "+L["desc"]+" "+L["st"])
+    _qa=listing_attrs(L)
     tt=set(toks(L["title"])); bt=set()
     for b in L["bullets"]: bt|=set(toks(b))
     dt=set(toks(L["desc"])); st=set(toks(L["st"])); front=tt|bt|dt
@@ -535,7 +542,7 @@ def fill_234(app,t1,t2,t3,t5,t6,L,cat,site):
         elif is_trademark(kl): status=("⚠️商标在标题/五点·撤(仅描述/ST用for-para措辞)" if (inT or inB) else ("ST合规(for形式)+UGC" if inS else "仅for/compatible措辞+UGC"))
         elif is_comp(kl) or is_ip(kl) or mx in ("品牌词-竞品","IP词"): status="UGC引导(勿直写)"
         elif fr or inS: status="已埋" if fr else "已埋(ST)"
-        elif mx in ("意图词","品牌词-平台"): status="待埋(补描述)" if qualify_embed(kw,cat,supp,soft) else "不埋"
+        elif mx in ("意图词","品牌词-平台"): status="待埋(补描述)" if qualify_embed(kw,cat,supp,soft,_qa) else "不埋"
         else: status="UGC待引导"
         t2r.append({"关键词":kw,"站点":site,"矩阵":mx,"埋词渠道":ch,"标题已埋":inT,"五点已埋":inB,"描述已埋":inD,"后台ST已埋":inS,"前台已覆盖":fr,"埋词状态":status})
     n2=batch(app,t2,t2r)
@@ -660,6 +667,7 @@ def process(rid):
 def compute_audit(L,rows,cat):
     """rows = 表1 fields dict 列表(已按站点过滤)。返回审计指标 dict(给周快照+delta用)。"""
     supp=supported_machines(L["title"]+" "+" ".join(L["bullets"])+" "+L["desc"],cat); soft=supports_soft(L["title"]+" "+" ".join(L["bullets"])+" "+L["desc"]+" "+L["st"])
+    _qa=listing_attrs(L)
     tt=set(toks(L["title"])); bt=set()
     for b in L["bullets"]: bt|=set(toks(b))
     dt=set(toks(L["desc"])); st=set(toks(L["st"])); front=tt|bt|dt
@@ -668,7 +676,7 @@ def compute_audit(L,rows,cat):
     for f in rows:
         kw=ext(f.get("关键词"))
         R.append({"kw":kw,"mx":f.get("矩阵"),"vol":float(ext(f.get("月搜索量")) or 0),"ord":float(ext(f.get("已出单单量")) or 0),
-                  "rank":float(ext(f.get("我方自然排名")) or 0),"front":cov(kw,front),"instr":cov(kw,st),"qual":qualify_embed(kw,cat,supp,soft)})
+                  "rank":float(ext(f.get("我方自然排名")) or 0),"front":cov(kw,front),"instr":cov(kw,st),"qual":qualify_embed(kw,cat,supp,soft,_qa)})
     total=len(R); embedded=sum(1 for r in R if r["front"] or r["instr"])
     rk=[r for r in R if r["rank"]>0]; p1=[r for r in rk if r["rank"]<=16]; p23=[r for r in rk if 16<r["rank"]<=48]; deep=[r for r in rk if r["rank"]>48]
     sens=lambda r: r["mx"] in ("IP词","品牌词-竞品") or is_ip(r["kw"]) or is_comp(r["kw"]) or is_trademark(r["kw"])
@@ -684,6 +692,7 @@ def compute_audit(L,rows,cat):
 def refresh_t2(app,t1,t2,L,cat,site):
     """只刷表2(Listing埋词审计),保持与最新 listing 文案同步(摘自 fill_234 表2 段)。"""
     supp=supported_machines(L["title"]+" "+" ".join(L["bullets"])+" "+L["desc"],cat); soft=supports_soft(L["title"]+" "+" ".join(L["bullets"])+" "+L["desc"]+" "+L["st"])
+    _qa=listing_attrs(L)
     tt=set(toks(L["title"])); bt=set()
     for b in L["bullets"]: bt|=set(toks(b))
     dt=set(toks(L["desc"])); st=set(toks(L["st"])); front=tt|bt|dt
@@ -701,7 +710,7 @@ def refresh_t2(app,t1,t2,L,cat,site):
         elif is_trademark(kl): status=("⚠️商标在标题/五点·撤(仅描述/ST用for-para措辞)" if (inT or inB) else ("ST合规(for形式)+UGC" if inS else "仅for/compatible措辞+UGC"))
         elif is_comp(kl) or is_ip(kl) or mx in ("品牌词-竞品","IP词"): status="UGC引导(勿直写)"
         elif fr or inS: status="已埋" if fr else "已埋(ST)"
-        elif mx in ("意图词","品牌词-平台"): status="待埋(补描述)" if qualify_embed(kw,cat,supp,soft) else "不埋"
+        elif mx in ("意图词","品牌词-平台"): status="待埋(补描述)" if qualify_embed(kw,cat,supp,soft,_qa) else "不埋"
         else: status="UGC待引导"
         t2r.append({"关键词":kw,"站点":site,"矩阵":mx,"埋词渠道":ch,"标题已埋":inT,"五点已埋":inB,"描述已埋":inD,"后台ST已埋":inS,"前台已覆盖":fr,"埋词状态":status})
     return batch(app,t2,t2r)
@@ -935,6 +944,7 @@ def audit14(meta, L, rows):
     cat=meta["cat"]; brand=meta.get("brand","")
     full=L["title"]+" "+" ".join(L["bullets"])+" "+L["desc"]
     supp=supported_machines(full,cat); soft=supports_soft(full+" "+L["st"])
+    _qa=listing_attrs(L)
     tt=set(toks(L["title"])); bt=set()
     for b in L["bullets"]: bt|=set(toks(b))
     dt=set(toks(L["desc"])); stt=set(toks(L["st"])); front=tt|bt|dt
@@ -943,7 +953,7 @@ def audit14(meta, L, rows):
     for f in rows:
         kw=ext(f.get("关键词"))
         R.append({"kw":kw,"mx":f.get("矩阵"),"vol":float(ext(f.get("月搜索量")) or 0),"ord":float(ext(f.get("已出单单量")) or 0),
-                  "rank":float(ext(f.get("我方自然排名")) or 0),"front":cov(kw,front),"instr":cov(kw,stt),"qual":qualify_embed(kw,cat,supp,soft)})
+                  "rank":float(ext(f.get("我方自然排名")) or 0),"front":cov(kw,front),"instr":cov(kw,stt),"qual":qualify_embed(kw,cat,supp,soft,_qa)})
     total=len(R); embedded=sum(1 for r in R if r["front"] or r["instr"])
     rk=[r for r in R if r["rank"]>0]; p1=[r for r in rk if r["rank"]<=16]; p23=[r for r in rk if 16<r["rank"]<=48]; deep=[r for r in rk if r["rank"]>48]
     sens=lambda r: r["mx"] in ("IP词","品牌词-竞品") or is_ip(r["kw"]) or is_comp(r["kw"]) or is_trademark(r["kw"])
