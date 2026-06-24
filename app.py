@@ -120,11 +120,21 @@ def is_other_platform(k): kl=" "+k.lower()+" "; return any(n in kl for n in OTHE
 def is_pure_console(k): kl=" "+k.lower()+" "; return any(n in kl for n in PURE_CONSOLE)
 def is_comp(k): kl=" "+k.lower()+" "; return any(b in kl for b in COMP_BRANDS)
 def is_machine_compat(k): t=set(re.findall(r'[a-z0-9]+',k.lower())); return bool(t) and t.issubset(MACHINE_TOK)
-def supported_machines(text):
-    t=" "+text.lower()+" "; s={"2"}
+def supported_machines(text,cat=None):
+    # 林明坚 2026-06-23: AI 抓产品可兼容机型;手柄(蓝牙/USB)通用兼容所有Switch变体, dock给TV输出Lite无视频口故不含lite。
+    t=" "+text.lower().replace("/"," / ")+" "; s={"2"}
+    if "oled" in t: s.add("oled")
     if "lite" in t: s.add("lite")
-    if any(x in t for x in ["switch 1","switch one","original switch","first gen","switch1"]): s.add("1")
+    if any(x in t for x in ["switch 1","switch one","original switch","first gen","switch1"," 1 / 2 "," 2 / 1 "]): s.add("1")
+    if cat=="controller": s|={"1","2","oled","lite"}   # 手柄通用兼容
+    elif cat=="dock": s|={"1","2","oled"}               # dock 不含 Lite(无视频输出)
     return s
+def incompat_machine_names(supp):
+    """不兼容机型的「机型名」(精准否定;产品可兼容机型不返回→不否定)。林明坚 2026-06-23。"""
+    out=[]
+    for mk,names in {"1":["switch 1","nintendo switch 1"],"lite":["switch lite","nintendo switch lite"],"oled":["switch oled","nintendo switch oled"]}.items():
+        if mk not in supp: out+=names
+    return out
 def incompatible_machine(kw,supp):
     k=" "+kw.lower()+" "
     if "lite" in k and "lite" not in supp: return True
@@ -139,10 +149,13 @@ def is_misspell(k):
 EN_SITES={"US","CA","UK","AU"}  # 英语关键词站; 其余(MX/DE/FR/ES/IT/JP)广告计划走本地化骨架
 LAPTOP_DOCK=["laptop","notebook","macbook","thinkpad","ultrabook","ordinateur portable","portatile"," dell ","lenovo","macbook","thunderbolt","displayport","display port","kvm","lenkrad","steering wheel"," monitore","zwei monitor","two monitor","dual monitor","2 monitore","drei monitor","usb c hub","usb-c hub","hdmi splitter","docking station laptop","laptop docking","docking station hp","docking station dell"," hp dock","surface pro","ipad pro","monitor adapter","displayport vers","vers displayport","hdmi displayport"]
 def is_laptop_dock(k): kl=" "+k.lower()+" "; return any(s in kl for s in LAPTOP_DOCK)  # 笔记本/PC扩展坞≠Switch console dock(含docking station会命中dock锚点,必单独剔)
+# 跨品类噪音(林明坚 2026-06-23: joystick avion=法语飞机摇杆): 含 joystick/manette/control 锚点但其实是别产品(飞行摇杆/赛车方向盘/街机摇杆)
+CROSS_NOISE=["avion","aereo","aircraft","airplane","flight stick","flightstick"," flight "," flying "," plane "," rc "," drone ","volant","steering wheel","racing wheel"," lenkrad "," yoke "," throttle ","hotas","arcade stick"," fight stick","fightstick","joystick arcade"]
+def is_cross_noise(k): kl=" "+k.lower()+" "; return any(n in kl for n in CROSS_NOISE)
 def qualify_embed(kw,cat,supp,soft=False):
     k=kw.lower()
     if is_trademark(k) or is_misspell(k): return False  # 商标走UGC / 拼写变体只投广告不写listing
-    if is_laptop_dock(k): return False  # 笔记本/PC扩展坞噪音(hp/dell/macbook docking station等)
+    if is_laptop_dock(k) or is_cross_noise(k): return False  # 笔记本dock + 跨品类(飞行摇杆/方向盘)噪音
     if is_hard_platform(k): return False  # xbox/ps/steam 永剔
     if soft_platform_hit(k) and not soft: return False  # pc/手机: listing没声明支持则剔(R4)
     if is_pure_console(k) or is_ip(k): return False
@@ -347,7 +360,7 @@ def clone_app(name):
 # ───────────────── HTML 审计 (港 audit_listing make) ─────────────────
 def esc(s): return str(s).replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
 def make_html(product,site,asin,store,L,rows,cat):
-    supp=supported_machines(L["title"]+" "+" ".join(L["bullets"])+" "+L["desc"]); soft=supports_soft(L["title"]+" "+" ".join(L["bullets"])+" "+L["desc"]+" "+L["st"])
+    supp=supported_machines(L["title"]+" "+" ".join(L["bullets"])+" "+L["desc"],cat); soft=supports_soft(L["title"]+" "+" ".join(L["bullets"])+" "+L["desc"]+" "+L["st"])
     tt=set(toks(L["title"])); bt=set()
     for b in L["bullets"]: bt|=set(toks(b))
     dt=set(toks(L["desc"])); st=set(toks(L["st"])); front=tt|bt|dt
@@ -421,7 +434,7 @@ def ads_tpl_local(cat,site,rows,soft=False,supp=None):
     """#4 非英语站(MX/DE/FR/ES/IT/JP): 骨架+本站词库本地词, bid/预算留空运营按本地市场填。"""
     anchors=CAT_ANCHORS.get(cat,CAT_ANCHORS["dock"])
     def ok(kl):  # 广告核心词: 排 拼写/IP/硬别平台/笔记本dock/纯console/竞品/不兼容机型; 且必须品类/机型相关(防"sing meinen song"类高搜noise)
-        if is_misspell(kl) or is_ip(kl) or is_hard_platform(kl) or is_laptop_dock(kl) or is_pure_console(kl) or is_comp(kl): return False
+        if is_misspell(kl) or is_ip(kl) or is_hard_platform(kl) or is_laptop_dock(kl) or is_cross_noise(kl) or is_pure_console(kl) or is_comp(kl): return False
         if soft_platform_hit(kl) and not soft: return False  # pc/手机词: listing没声明支持才剔(R4)
         if supp and incompatible_machine(kl,supp): return False  # 不兼容机型(本品不支持的 switch 1/lite 等)整片剔(2026-06-22 翔宇/明坚反馈)
         if any(a in kl for a in anchors): return True
@@ -439,22 +452,45 @@ def ads_tpl_local(cat,site,rows,soft=False,supp=None):
     GIFTL=["regalo","cadeau","geschenk","regalo gamer","weihnacht"]
     NF="待运营填(本地市场)"
     # 林明坚反馈(2026-06-22): 按表1「词级」分桶,大词→核心大词Exact / 中词→中词扩量Exact / 小词→Broad长尾,每词只进对应层级计划(不再三层用同一批core词)。空桶给占位不回退复制。
-    core=pick(4,tier="大词") or "(本站词库暂无大词级核心词,运营按本地市场补)"
+    if cat=="controller":
+        # 陈翔宇 2026-06-23: control(本地语)+controller(英语)在 MX 等站都有流量,核心簇必须两根都覆盖(不能只打其一)
+        er=lambda k:"controller" in k
+        lr=lambda k:("controller" not in k) and (("controles" in k) or ("mando" in k) or re.search(r'\bcontrol\b',k))
+        ce=pick(2,pred=er,tier="大词") or pick(2,pred=er)
+        cl=pick(2,pred=lr,tier="大词") or pick(2,pred=lr)
+        seg=[x for x in (ce,cl) if x]
+        core=" | ".join(seg) if seg else (pick(4,tier="大词") or "(本站词库暂无大词级核心词,运营按本地市场补)")
+    else:
+        core=pick(4,tier="大词") or "(本站词库暂无大词级核心词,运营按本地市场补)"
     mid=pick(4,tier="中词",excl_bare=True) or "(本站词库暂无中词级词,运营补)"   # 明坚反馈: Broad排裸锚词(controller/manette单独)防过泛烧预算,裸词只留Exact/Auto
     longt=pick(6,tier="小词",excl_bare=True) or "(本站词库暂无小词/长尾词,运营补)"
     sbv=pick(2,tier="大词") or "(本站大词级核心词)"
     wb=lambda terms:(lambda k:any(re.search(r'\b'+re.escape(s)+r'\b',k) for s in terms))  # 词边界,防 fan 命中 fantasy
     sell=pick(4,wb(SELL)) or "(本站卖点词)"
     gift=pick(3,wb(GIFTL)) or "(本站礼品词:regalo/geschenk/cadeau)"
-    R=lambda w:w+" · 词从本站词库按词级选,bid 待运营按本地市场定"
-    return [P(f"SP-Auto-捡词({site})","SP-Auto自动","自动(4匹配)","系统自动匹配",NF,NF,NF,"P1",R("起量挖本地搜索词")),
-            P(f"SP-Exact-核心大词({site})","SP手动Exact","Exact",core,NF,NF,NF,"P1",R("本站大词级核心词Exact卡位(词级=大词)")),
-            P(f"SP-Broad-中词扩量({site})","SP手动Broad","Broad",mid,NF,NF,NF,"P2",R("本站中词级走Broad扩覆盖(词级=中词,量偏低开Broad不开Exact)")),
-            P(f"SP-Broad-长尾({site})","SP手动Broad","Broad",longt,NF,NF,NF,"P1",R("Broad发本站小词/长尾(词级=小词)")),
-            P(f"SP-Exact-卖点簇({site})","SP手动Exact","Exact",sell,NF,NF,NF,"P2",R("本站卖点词")),
-            P(f"SD-竞品定投({site})","SD商品定投","ASIN定投","本站竞品ASIN(按本地市场选)",NF,NF,NF,"P2",R("SD打本地竞品")),
-            P(f"SBV-品牌簇({site})","SBV视频","Exact",sbv,NF,NF,NF,"P2",R("视频展示(大词级)")),
-            P(f"SP-Exact-礼品({site})","SP手动Exact","Exact",gift,NF,NF,NF,"Q4",R("Q4礼品季"))]
+    # (B) 起始 bid/预算/ACoS = 本站词库 CPC$(本地币,如 MX=peso/EU=€) × 簇系数。Frankie 2026-06-23 选 B(陈翔宇#3)。
+    # 实测 表1 CPC$ 是各站本地币(MX 中位 2.52 peso),故起始数本就对本地市场;无 CPC 数据→留运营填。
+    import statistics as _st
+    def tcpc(*tiers):  # 按词级取 CPC 中位(大词CPC远高于长尾,核心大词簇必须用大词CPC不用全站中位,否则起始bid低20倍跑不出量)
+        cs=[float(ext(f.get("CPC$")) or 0) for f in rows if f.get("矩阵")=="意图词" and f.get("词级") in tiers and float(ext(f.get("CPC$")) or 0)>0]
+        return round(_st.median(cs),2) if cs else None
+    allc=[float(ext(f.get("CPC$")) or 0) for f in rows if f.get("矩阵")=="意图词" and float(ext(f.get("CPC$")) or 0)>0]
+    base_all=round(_st.median(allc),2) if allc else None
+    CUR={"US":"$","CA":"C$","UK":"£","AU":"A$","MX":"MX$","JP":"¥","DE":"€","FR":"€","ES":"€","IT":"€"}.get(site,"")
+    def bd(tier_base,bf,budf,ac):
+        bb=tier_base if tier_base is not None else base_all
+        if bb is None: return NF,NF,NF
+        b=round(bb*bf,2); return (f"≈{CUR}{b}",f"≈{CUR}{int(round(b*budf))}",f"{ac}%")
+    BIG=tcpc("大词"); MID=tcpc("中词"); SML=tcpc("小词")
+    R=lambda w:w+" · 词按词级选;bid/预算/ACoS=本站对应词级 CPC 起始参考(本地币),运营按实际表现调"
+    return [P(f"SP-Auto-捡词({site})","SP-Auto自动","自动(4匹配)","系统自动匹配",*bd(SML,0.7,25,40),"P1",R("起量挖本地搜索词")),
+            P(f"SP-Exact-核心大词({site})","SP手动Exact","Exact",core,*bd(BIG,0.85,15,30),"P1",R("本站大词级核心词Exact卡位(词级=大词)")),
+            P(f"SP-Broad-中词扩量({site})","SP手动Broad","Broad",mid,*bd(MID,0.8,18,35),"P2",R("本站中词级走Broad扩覆盖(词级=中词,量偏低开Broad不开Exact)")),
+            P(f"SP-Broad-长尾({site})","SP手动Broad","Broad",longt,*bd(SML,0.8,18,38),"P1",R("Broad发本站小词/长尾(词级=小词)")),
+            P(f"SP-Exact-卖点簇({site})","SP手动Exact","Exact",sell,*bd(MID,0.8,14,32),"P2",R("本站卖点词")),
+            P(f"SD-竞品定投({site})","SD商品定投","ASIN定投","本站竞品ASIN(按本地市场选)",*bd(BIG,0.7,12,35),"P2",R("SD打本地竞品")),
+            P(f"SBV-品牌簇({site})","SBV视频","Exact",sbv,*bd(BIG,0.8,12,32),"P2",R("视频展示(大词级)")),
+            P(f"SP-Exact-礼品({site})","SP手动Exact","Exact",gift,*bd(SML,0.7,10,38),"Q4",R("Q4礼品季"))]
 def _ads_tpl_base(cat,site,rows,soft=False,supp=None):
     return ads_tpl_local(cat,site,rows,soft,supp)  # 全站(含US,Frankie 2026-06-23 "美国也不例外")走数据驱动词级分桶;下方US硬编controller/case/dock模板已弃用(保留作参考)
     if cat=="controller": return [P("SP-Auto-手柄捡词","SP-Auto自动","自动(4匹配)","系统自动匹配","$0.45","$20","30%","P1","起量+挖搜索词;低bid捡漏"),P("SP-Exact-核心手柄大词","SP手动Exact","Exact","switch 2 controller | nintendo switch 2 controller | switch 2 pro controller","$1.0","$25","28%","P1","核心词Exact卡位"),P("SP-Exact-中词扩量","SP手动Exact","Exact","hall effect controller | switch controller wireless","$0.8","$20","30%","P2","中词扩量"),P("SP-Broad-手柄长尾","SP手动Broad","Broad","switch 2 controller with paddles | turbo controller switch","$0.5","$15","32%","P1","Broad发长尾(精准否锁大词)"),P("SP-Exact-卖点簇","SP手动Exact","Exact","hall effect joystick | back paddle controller | turbo | rgb controller","$0.7","$12","30%","P2","霍尔/背键/连发/RGB"),P("SD-竞品手柄定投","SD商品定投","ASIN定投","8bitdo/GameSir/NYXI 竞品ASIN","$0.6","$12","32%","P2","SD打竞品详情页"),P("SBV-手柄品牌簇","SBV视频","Exact","switch 2 controller","$1.0","$15","30%","P2","视频展示霍尔+握感"),P("SP-Exact-礼品词","SP手动Exact","Exact","gifts for gamers | switch gifts","$0.6","$10","32%","Q4","Q4礼品季")]
@@ -469,7 +505,7 @@ def ads_tpl(cat,site="US",rows=None,soft=False,supp=None):
             if "竞品" in p["计划名"]: p["包含关键词"]="竞品ASIN定投·本站市场: "+" / ".join(comp)+" (取自本站词库竞品;具体ASIN见表1「竞品前十ASIN」列;运营可补市场畅销竞品)"
     return lst
 def fill_234(app,t1,t2,t3,t5,t6,L,cat,site):
-    supp=supported_machines(L["title"]+" "+" ".join(L["bullets"])+" "+L["desc"]); soft=supports_soft(L["title"]+" "+" ".join(L["bullets"])+" "+L["desc"]+" "+L["st"])
+    supp=supported_machines(L["title"]+" "+" ".join(L["bullets"])+" "+L["desc"],cat); soft=supports_soft(L["title"]+" "+" ".join(L["bullets"])+" "+L["desc"]+" "+L["st"])
     tt=set(toks(L["title"])); bt=set()
     for b in L["bullets"]: bt|=set(toks(b))
     dt=set(toks(L["desc"])); st=set(toks(L["st"])); front=tt|bt|dt
@@ -502,7 +538,8 @@ def fill_234(app,t1,t2,t3,t5,t6,L,cat,site):
     def add(w,way,c,note):
         wl=w.strip().lower()
         if wl and wl not in seen: seen.add(wl); out.append({"否定词":w.strip(),"站点":site,"否定方式":way,"类别":c,"状态":"待添加","应用范围":"全广告活动","备注":note})
-    for w in ["switch","nintendo switch","switch 2","nintendo switch 2","nintendo","switch oled","nintendo switch oled","switch lite","steam deck","steamdeck"]: add(w,"精准否定","大词/品牌/泛词","裸平台大词:只否精确,留Broad发长尾")
+    for w in ["switch","nintendo switch","switch 2","nintendo switch 2","nintendo","steam deck","steamdeck"]: add(w,"精准否定","大词/品牌/泛词","裸平台大词:只否精确,留Broad发长尾")
+    for w in incompat_machine_names(supp): add(w,"精准否定","大词/品牌/泛词","产品不兼容此机型;机型名精准否(留兼容机型流量,不词组否)")  # 林明坚: 产品可兼容机型不否定
     for c in COLORS: add(c,"词组否定","颜色词","本品单色,其余颜色整片否(运营留自己色)")
     for w in PRICE: add(w,"词组否定","其他(配件/平台)","价格/二手意图")
     for w in CROSS.get(cat,[]): add(w,"词组否定","其他(配件/平台)","别品类配件,整片屏蔽")
@@ -514,8 +551,9 @@ def fill_234(app,t1,t2,t3,t5,t6,L,cat,site):
         if not kw: continue
         if is_comp(kl): add(kw,"精准否定","大词/品牌/泛词","竞品品牌,精准否")
         elif is_pure_console(kl): add(kw,"精准否定","大词/品牌/泛词","游戏/主机/捆绑搜索,精准否")
-        elif incompatible_machine(kl,supp): add(kw,"词组否定","其他(配件/平台)","不兼容该机型,整片屏蔽")
+        elif is_cross_noise(kl): add(kw,"词组否定","其他(配件/平台)","跨品类(飞行摇杆/方向盘等别产品),屏蔽")
         elif mx=="IP词" or is_ip(kl): add(kw,"词组否定","IP词","未授权IP,靠UGC")
+        # 不兼容机型不再逐词词组否定(林明坚: 机型名已在上方精准否定;产品可兼容机型不否定)
         if len(out)>=90: break
     n6=batch(app,t6,out)
     return n2,n3,n5,n6
@@ -606,7 +644,7 @@ def process(rid):
 # ───────────────── L3 每周复审 ─────────────────
 def compute_audit(L,rows,cat):
     """rows = 表1 fields dict 列表(已按站点过滤)。返回审计指标 dict(给周快照+delta用)。"""
-    supp=supported_machines(L["title"]+" "+" ".join(L["bullets"])+" "+L["desc"]); soft=supports_soft(L["title"]+" "+" ".join(L["bullets"])+" "+L["desc"]+" "+L["st"])
+    supp=supported_machines(L["title"]+" "+" ".join(L["bullets"])+" "+L["desc"],cat); soft=supports_soft(L["title"]+" "+" ".join(L["bullets"])+" "+L["desc"]+" "+L["st"])
     tt=set(toks(L["title"])); bt=set()
     for b in L["bullets"]: bt|=set(toks(b))
     dt=set(toks(L["desc"])); st=set(toks(L["st"])); front=tt|bt|dt
@@ -630,7 +668,7 @@ def compute_audit(L,rows,cat):
 
 def refresh_t2(app,t1,t2,L,cat,site):
     """只刷表2(Listing埋词审计),保持与最新 listing 文案同步(摘自 fill_234 表2 段)。"""
-    supp=supported_machines(L["title"]+" "+" ".join(L["bullets"])+" "+L["desc"]); soft=supports_soft(L["title"]+" "+" ".join(L["bullets"])+" "+L["desc"]+" "+L["st"])
+    supp=supported_machines(L["title"]+" "+" ".join(L["bullets"])+" "+L["desc"],cat); soft=supports_soft(L["title"]+" "+" ".join(L["bullets"])+" "+L["desc"]+" "+L["st"])
     tt=set(toks(L["title"])); bt=set()
     for b in L["bullets"]: bt|=set(toks(b))
     dt=set(toks(L["desc"])); st=set(toks(L["st"])); front=tt|bt|dt
