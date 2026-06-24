@@ -112,7 +112,7 @@ def is_hard_platform(k): kl=" "+k.lower()+" "; return any(n in kl for n in HARD_
 def soft_platform_hit(k): kl=" "+k.lower()+" "; return any(n in kl for n in SOFT_PLATFORM)
 def supports_soft(text): t=" "+text.lower()+" "; return any(n in t for n in [" pc ","windows","android"," ios ","iphone","mobile"," phone"])
 PURE_CONSOLE=["console","consola","konsole","bundle"," games","switch games","spiele "]
-COMP_BRANDS=["8bitdo","8 bit do","8bit do","gamesir","razer","gulikit","nyxi","mobapad","hori ","ipega","flydigi","binbok","powera","power a","pxn","pdp ","nyko","iine","kingkong","easysmx","voyee","nitro deck","jsaux","genki","antank","belkin","tomtoc","spigen","dbrand","mooroer","fintie","procase","orzly","skull & co","skull and co","geekshare","playvital","geekria","mumba","younik","hyperkin","scuf","turtle beach","logitech","asus"," luna ","anki","turtlebeach"]
+COMP_BRANDS=["8bitdo","8 bit do","8bit do"," 8bit ","gamesir","razer","gulikit","nyxi","mobapad","hori ","ipega","flydigi","binbok","powera","power a","pxn","pdp ","nyko","iine","kingkong","easysmx","voyee","nitro deck","jsaux","genki","antank","belkin","tomtoc","spigen","dbrand","mooroer","fintie","procase","orzly","skull & co","skull and co","geekshare","playvital","geekria","mumba","younik","hyperkin","scuf","turtle beach","logitech","asus"," luna ","anki","turtlebeach"]
 COMP_DISPLAY={"8bitdo":"8BitDo","8 bit do":"8BitDo","8bit do":"8BitDo","gamesir":"GameSir","nyxi":"NYXI","powera":"PowerA","power a":"PowerA","pdp":"PDP","hori":"Hori","gulikit":"GuliKit","mobapad":"Mobapad","binbok":"Binbok","nitro deck":"Nitro Deck","ipega":"iPega","flydigi":"Flydigi","easysmx":"EasySMX","voyee":"VOYEE","pxn":"PXN","hyperkin":"Hyperkin","nyko":"Nyko","iine":"IINE","jsaux":"JSAUX","genki":"Genki","tomtoc":"tomtoc","belkin":"Belkin","spigen":"Spigen","razer":"Razer"}
 MACHINE_TOK=set(["nintendo","switch","2","oled","lite","1","one"])
 def is_ip(k): kl=" "+k.lower()+" "; return any(n in kl for n in IP_SENS)
@@ -430,13 +430,18 @@ def local_comp_brands(rows,topn=8):
         for b in COMP_BRANDS:
             if b in kw: c[COMP_DISPLAY.get(b.strip(),b.strip().title())]+=1+vol/100000.0  # 出现1次=+1,月搜量仅微调tiebreak
     return [b for b,_ in c.most_common(topn)]
-def ads_tpl_local(cat,site,rows,soft=False,supp=None):
+def ads_tpl_local(cat,site,rows,soft=False,supp=None,attrs=None):
     """#4 非英语站(MX/DE/FR/ES/IT/JP): 骨架+本站词库本地词, bid/预算留空运营按本地市场填。"""
     anchors=CAT_ANCHORS.get(cat,CAT_ANCHORS["dock"])
-    def ok(kl):  # 广告核心词: 排 拼写/IP/硬别平台/笔记本dock/纯console/竞品/不兼容机型; 且必须品类/机型相关(防"sing meinen song"类高搜noise)
+    A=attrs or {}
+    def ok(kl):  # 广告核心词: 排 拼写/IP/硬别平台/笔记本dock/纯console/竞品/不兼容机型/属性不匹配; 且必须品类/机型相关
         if is_misspell(kl) or is_ip(kl) or is_hard_platform(kl) or is_laptop_dock(kl) or is_cross_noise(kl) or is_pure_console(kl) or is_comp(kl): return False
         if soft_platform_hit(kl) and not soft: return False  # pc/手机词: listing没声明支持才剔(R4)
-        if supp and incompatible_machine(kl,supp): return False  # 不兼容机型(本品不支持的 switch 1/lite 等)整片剔(2026-06-22 翔宇/明坚反馈)
+        if supp and incompatible_machine(kl,supp): return False  # 不兼容机型整片剔(2026-06-22 翔宇/明坚)
+        # 黄奕纯 2026-06-24: 属性不匹配剔——颜色非本品色(pink给黑色品)/wired给无线品/handheld(一体式如YS43)给Pro手柄
+        if any(re.search(r'\b'+re.escape(c)+r'\b',kl) for c in COLORS): return False  # 颜色长尾整片排(否定侧已留运营自己色)
+        if A.get("wireless") and re.search(r'\bwired\b',kl): return False
+        if cat=="controller" and not A.get("handheld_self") and re.search(r'\bhandheld\b',kl): return False
         if any(a in kl for a in anchors): return True
         return is_machine_compat(kl)  # 纯机型词(nintendo switch 2)放行;跨品类(switch 2 controller 对dock)剔除
     def pick(n,pred=None,tier=None,excl_bare=False):
@@ -491,14 +496,20 @@ def ads_tpl_local(cat,site,rows,soft=False,supp=None):
             P(f"SD-竞品定投({site})","SD商品定投","ASIN定投","本站竞品ASIN(按本地市场选)",*bd(BIG,0.7,12,35),"P2",R("SD打本地竞品")),
             P(f"SBV-品牌簇({site})","SBV视频","Exact",sbv,*bd(BIG,0.8,12,32),"P2",R("视频展示(大词级)")),
             P(f"SP-Exact-礼品({site})","SP手动Exact","Exact",gift,*bd(SML,0.7,10,38),"Q4",R("Q4礼品季"))]
-def _ads_tpl_base(cat,site,rows,soft=False,supp=None):
-    return ads_tpl_local(cat,site,rows,soft,supp)  # 全站(含US,Frankie 2026-06-23 "美国也不例外")走数据驱动词级分桶;下方US硬编controller/case/dock模板已弃用(保留作参考)
+def listing_attrs(L):
+    """从 listing 推产品属性(供广告属性过滤): 是否无线 / 本品是否一体式(handheld)手柄。黄奕纯 2026-06-24。"""
+    t=(L["title"]+" "+" ".join(L["bullets"])+" "+L["desc"]).lower(); tt=L["title"].lower()
+    wireless=any(w in t for w in ["wireless","bluetooth"," 2.4g","2.4 g","sans fil","kabellos","inalámbric","inalambric","drahtlos","senza fili","sin cable"])
+    handheld_self=any(w in tt for w in ["handheld controller"," one-piece","one piece","一体式","integrated controller"," grip controller"])
+    return {"wireless":wireless,"handheld_self":handheld_self}
+def _ads_tpl_base(cat,site,rows,soft=False,supp=None,attrs=None):
+    return ads_tpl_local(cat,site,rows,soft,supp,attrs)  # 全站(含US,Frankie 2026-06-23 "美国也不例外")走数据驱动词级分桶;下方US硬编controller/case/dock模板已弃用(保留作参考)
     if cat=="controller": return [P("SP-Auto-手柄捡词","SP-Auto自动","自动(4匹配)","系统自动匹配","$0.45","$20","30%","P1","起量+挖搜索词;低bid捡漏"),P("SP-Exact-核心手柄大词","SP手动Exact","Exact","switch 2 controller | nintendo switch 2 controller | switch 2 pro controller","$1.0","$25","28%","P1","核心词Exact卡位"),P("SP-Exact-中词扩量","SP手动Exact","Exact","hall effect controller | switch controller wireless","$0.8","$20","30%","P2","中词扩量"),P("SP-Broad-手柄长尾","SP手动Broad","Broad","switch 2 controller with paddles | turbo controller switch","$0.5","$15","32%","P1","Broad发长尾(精准否锁大词)"),P("SP-Exact-卖点簇","SP手动Exact","Exact","hall effect joystick | back paddle controller | turbo | rgb controller","$0.7","$12","30%","P2","霍尔/背键/连发/RGB"),P("SD-竞品手柄定投","SD商品定投","ASIN定投","8bitdo/GameSir/NYXI 竞品ASIN","$0.6","$12","32%","P2","SD打竞品详情页"),P("SBV-手柄品牌簇","SBV视频","Exact","switch 2 controller","$1.0","$15","30%","P2","视频展示霍尔+握感"),P("SP-Exact-礼品词","SP手动Exact","Exact","gifts for gamers | switch gifts","$0.6","$10","32%","Q4","Q4礼品季")]
     if cat=="case": return [P("SP-Auto-卡盒捡词","SP-Auto自动","自动(4匹配)","系统自动匹配","$0.40","$15","30%","P1","起量+挖词"),P("SP-Exact-核心卡盒大词","SP手动Exact","Exact","switch 2 case | nintendo switch 2 case | switch 2 carrying case","$0.8","$20","28%","P1","核心词Exact卡位"),P("SP-Exact-中词扩量","SP手动Exact","Exact","switch 2 storage case | hard shell switch case | switch game holder","$0.6","$15","30%","P2","中词扩量"),P("SP-Broad-卡盒长尾","SP手动Broad","Broad","switch 2 travel case | slim case switch","$0.45","$12","32%","P1","Broad发长尾"),P("SP-Exact-卖点簇","SP手动Exact","Exact","hard shell switch 2 case | switch case 10 game","$0.55","$10","30%","P2","硬壳/卡槽/便携"),P("SD-竞品卡盒定投","SD商品定投","ASIN定投","tomtoc/Belkin 竞品ASIN","$0.5","$10","32%","P2","SD打竞品卡盒"),P("SBV-卡盒品牌簇","SBV视频","Exact","switch 2 case","$0.8","$12","30%","P2","展示卡槽+材质"),P("SP-Exact-礼品词","SP手动Exact","Exact","gifts for gamers | switch gifts","$0.5","$10","32%","Q4","Q4礼品季")]
     return [P("SP-Auto-dock捡词","SP-Auto自动","自动(4匹配)","系统自动匹配","$0.45","$20","28%","P1","起量+挖词"),P("SP-Exact-核心dock大词","SP手动Exact","Exact","switch 2 dock | nintendo switch 2 dock | switch 2 docking station","$1.2","$25","25%","P1","核心词Exact卡位"),P("SP-Exact-中词扩量","SP手动Exact","Exact","switch dock | switch 2 tv dock | switch 2 charging dock","$0.9","$20","28%","P2","中词扩量"),P("SP-Broad-dock长尾","SP手动Broad","Broad","switch 2 portable dock | switch oled dock","$0.5","$15","30%","P1","Broad发长尾"),P("SP-Exact-卖点簇","SP手动Exact","Exact","switch 2 dock with fan | switch 2 4k dock","$0.8","$12","28%","P2","散热/4K/充电"),P("SD-竞品dock定投","SD商品定投","ASIN定投","JSAUX/Genki 竞品ASIN","$0.6","$12","30%","P2","SD打竞品dock"),P("SBV-dock品牌簇","SBV视频","Exact","switch 2 dock","$1.0","$15","28%","P2","展示散热+4K"),P("SP-Exact-礼品词","SP手动Exact","Exact","gifts for gamers | switch gifts","$0.6","$10","32%","Q4","Q4礼品季")]
-def ads_tpl(cat,site="US",rows=None,soft=False,supp=None):
+def ads_tpl(cat,site="US",rows=None,soft=False,supp=None,attrs=None):
     rows=rows or []
-    lst=_ads_tpl_base(cat,site,rows,soft,supp)
+    lst=_ads_tpl_base(cat,site,rows,soft,supp,attrs)
     comp=local_comp_brands(rows)  # #翔宇: SD竞品定投用本站市场真实竞品(MX=PowerA/PDP/8bitdo)非美国硬编
     if comp:
         for p in lst:
@@ -531,7 +542,7 @@ def fill_234(app,t1,t2,t3,t5,t6,L,cat,site):
     if not lall(app,t5):
         n5=batch(app,t5,[{"阶段":"P1 (0-30d)","阶段目标":"低SPR小词冲首页+核心品类词建联","关键KPI":"核心词进首页;Auto挖词反哺","农村是否生效":"观察中","下阶段触发条件":"核心词稳定P1"},{"阶段":"P2 (30-60d)","阶段目标":"大词排名爬升+中词扩量+补埋","关键KPI":"大词进前2页;簇收录率>50%","农村是否生效":"观察中","下阶段触发条件":"大词进前2页+ACoS可控"},{"阶段":"P3 (60d+)","阶段目标":"核心词进前10转防守+SD打竞品","关键KPI":"核心词稳定前10","农村是否生效":"观察中","下阶段触发条件":"前10稳定2周"}])
     ensure_site(app,t3); clear(app,t3,lambda f:f.get("站点")==site)  # per-site: 多站点app每站独立广告框架(本地语言词)
-    t3rows=ads_tpl(cat,site,rows,soft,supp)
+    t3rows=ads_tpl(cat,site,rows,soft,supp,listing_attrs(L))
     for p in t3rows: p["站点"]=site
     n3=batch(app,t3,t3rows)
     ensure_site(app,t6); clear(app,t6,lambda f:f.get("站点")==site); out=[]; seen=set()  # per-site 否定词
@@ -543,6 +554,9 @@ def fill_234(app,t1,t2,t3,t5,t6,L,cat,site):
     for c in COLORS: add(c,"词组否定","颜色词","本品单色,其余颜色整片否(运营留自己色)")
     for w in PRICE: add(w,"词组否定","其他(配件/平台)","价格/二手意图")
     for w in CROSS.get(cat,[]): add(w,"词组否定","其他(配件/平台)","别品类配件,整片屏蔽")
+    _att=listing_attrs(L)  # 黄奕纯 2026-06-24: 属性不匹配否定
+    if _att.get("wireless"): add("wired","词组否定","其他(配件/平台)","本品无线,wired搜索不匹配")
+    if cat=="controller" and not _att.get("handheld_self"): add("handheld","词组否定","其他(配件/平台)","handheld controller=一体式手柄(YS43类),本品是Pro手柄")
     for w in ["xbox","ps5","ps4","ps3","playstation","dualsense","steam controller"]: add(w,"词组否定","其他(配件/平台)","别平台,整片屏蔽")
     if not soft:  # R4: listing没声明支持PC/手机才否; 声明支持则pc/android是有效兼容流量不否
         for w in ["pc","android"]: add(w,"词组否定","其他(配件/平台)","别平台(本品未声明PC/手机支持);若支持则listing补一句并移除此否定")
