@@ -1054,7 +1054,7 @@ code{{background:#1a1a20;padding:1px 5px;border-radius:3px;color:#cfcfd4;font-si
 .tier b{{font-size:18px}}
 </style></head><body><div class=wrap>""")
     h.append(f"<h1>{esc(meta['product'])} · {site} · Listing 系统化审计(14维)</h1>")
-    h.append(f"<p class=sub>店 {esc(meta['store'])} / sku {esc(meta['sku'])} / ASIN {meta['asin']} · 品类 {cat} · 负责运营 {meta['op']} · 2026-06-23 · 自动生成(数据驱动)</p>")
+    h.append(f"<p class=sub>店 {esc(meta['store'])} / sku {esc(meta['sku'])} / ASIN {meta['asin']} · 品类 {cat} · 负责运营 {meta['op']} · 审计口径: Listing Audit Template (R1-R6/C/S/T+H) · 数据驱动自动生成</p>")
     # 完备性
     h.append(f"<div class=box><b>📋 这次审计覆盖了什么</b><br>✅ 已审(数据驱动):埋词覆盖·收录分层·后台搜索词·机型兼容·品牌名·合规·IP联想 ｜ 🖼 需人看图:主图·A+ ｜ 📝 需运营后台看:评价星级·QA数·差评·售价 ｜ ✍ 需运营改写(本站给结构指引,主力产品才出精修稿):标题/五点/描述 prose ｜ ⚪ 没做:AI推荐池·毛利<br><span class=sub>词库 {a['total']} 词 ｜ 埋词覆盖 {a['cover_pct']}% ｜ 已收录(有自然排名){a['recorded']} 词</span></div>")
     # 头号问题
