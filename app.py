@@ -4,6 +4,7 @@
 → 填表2/3/5/6 → 发对应运营 → 回写状态。 密钥全走 env(public repo 不内联)。"""
 import os, io, re, json, time, uuid, zipfile, tempfile, glob, threading, urllib.request, datetime
 from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse
 
 FEISHU_APP_ID=os.environ["FEISHU_APP_ID"]; FEISHU_APP_SECRET=os.environ["FEISHU_APP_SECRET"]
 PROXY=os.environ.get("LX_PROXY","https://frankiepan501.zeabur.app/webhook/lingxing-proxy")
@@ -840,6 +841,7 @@ def do_review(frankie_only=False,dry=False):
             for it in sorted(items,key=lambda x:(x["m"]["status"]=="正常",-x["m"]["cover_pct"])):
                 m=it["m"]; tag="" if it["first"] else f" (覆盖{_arrow(it['d_cov'])} 收录{_arrow(it['d_rec'])} 首页{_arrow(it['d_p1'])})"
                 lines.append(f"**{it['product']} {it['site']}** · 埋词覆盖 {m['cover_pct']}% · 已收录 {m['recorded']}(首页{m['p1']}) · 合适词 {m['fit']}{tag}")
+                lines.append(f"  🔗 [查看14维深度报告]({REPORT_BASE}/report?asin={it['asin']}&site={it['site']})")
                 if m["status"]!="正常": lines.append(f"  🔴 listing **{m['status']}** → 先补全文案再谈埋词")
                 elif not it["haverank"]: lines.append("  ⚪ 收录追踪未铺开(以埋词覆盖率为准)")
                 if m["miss"]: lines.append("  📌 漏埋高价值: "+" / ".join(x["kw"] for x in m["miss"][:4]))
@@ -872,6 +874,291 @@ def do_review(frankie_only=False,dry=False):
         im_card(foid,f"🟡 [AMZ·P2] 万词周自检总览 · {day}",md,"blue")
     return {"ok":True,"reviewed":len(per_op),"snap":len(new_snap),"errors":errors}
 
+
+
+# ═══════════════ 14维 listing 审计(港自 build_14dim, L3 cron /report 用) ═══════════════
+REPORT_BASE=os.environ.get("WANCI_REPORT_BASE","https://wanci-onboard.zeabur.app")
+STORE14={1182:"FUNLAB-US",1192:"FunlabDirect-UK",1194:"FunlabDirect-DE",1195:"FunlabDirect-FR",1196:"FunlabDirect-ES",
+ 1193:"FunlabDirect-IT",1197:"FUNLAB-CA",2650:"FUNLAB-MX",3841:"Fanlepu-US",3842:"Fanlepu-CA",4704:"Fanlepu-DE",
+ 4705:"Fanlepu-FR",4706:"Fanlepu-ES",4703:"Fanlepu-IT",9633:"DRIESNAUDE-UK"}
+_PIRANHA="Piranha Plant->Mario(任天堂),抽象纹路合规-无IP"
+_ZELDA="Zelda 王国之泪 TOTK 主题联想"
+_DAVE="Dave the Diver"
+_HONEY="Pokemon/Combee 蜂巢->honeycomb 联想,抽象纹路合规-无IP"
+# product -> (brand, ip_assoc, licensed, 品牌型号);新产品默认("","",False,"")=保守不推FUNLAB术语
+PRODUCT_META={
+ "小红包二代":("FUNLAB","",False,""),
+ "24图鉴":("FUNLAB","",False,""),
+ "24波纹":("","",False,""),
+ "KS35灰":("FUNLAB","",False,""),
+ "11-5戴夫":("FUNLAB",_DAVE,True,"FF05A-04"),
+ "11戴夫":("FUNLAB",_DAVE,True,"FF05A-04"),
+ "11波纹":("PALPOW",_ZELDA,False,""),
+ "11白眼":("PALPOW",_ZELDA,False,""),
+ "食人花dock":("POWKONG",_PIRANHA,False,""),
+ "食人花2代":("POWKONG",_PIRANHA,False,""),
+ "蜂窝手柄":("FUNLAB",_HONEY,False,"FF01A-07"),
+}
+
+A="#19E0CE"
+def by(s): return len(s.encode("utf-8"))
+
+# 品牌官方术语(R6): FUNLAB 灯效官方名 / 系列
+FUNLAB_LIGHT=["hidden glow","hidden until lit"]
+FUNLAB_SERIES=["firefly","luminous","luminex","luminpad","luminite","funlite","lumi set"]
+# R6 数据驱动: 查 FUNLAB 产品库(SKU库)拿该产品真实 系列英文名/型号英文名/有无RGB灯效。
+# 陈翔宇 2026-06-24: KS35 不在FUNLAB品牌库/没Hidden Glow,不能套用;Hidden Glow只对真有RGB灯效的产品(产品库RGB非空)。
+SKU_APP="MvtZb6OE9aJFaisO913cWSErnFe"; SKU_FUN="tblwJ3BRkIuHDuSK"
+_VI={}
+def funlab_vi(bxh):
+    if not bxh: return None
+    if not _VI:
+        for r in lall(SKU_APP,SKU_FUN):
+            f=r["fields"]; k=ext(f.get("品牌型号")).strip()
+            if k: _VI[k.lower()]={"series":ext(f.get("系列英文名")).strip(),"model":ext(f.get("型号英文名")).strip(),"rgb":bool(ext(f.get("RGB")).strip())}
+    return _VI.get(bxh.strip().lower())
+# IP 检测用「严格 franchise 名单」(不用引擎 is_ip 的松散子串匹配,避免德语 Karten(卡)被 kart 误判 /
+# Piranha 2 品牌安全名被 piranha 误判;只有 piranha plant 全称才是 IP 红线)
+IP_STRICT=["pokemon","pokémon","pikachu","zelda","tears of the kingdom","totk","breath of the wild",
+ "super mario"," mario kart"," mario "," luigi "," bowser "," kirby ","gengar","piranha plant","piranha flower",
+ "splatoon","metroid","animal crossing","minecraft","donkey kong","hello kitty","star fox","starfox"]
+IP_MIS=["pokmen","pokeman","pokmon","pokimon","pikchu"]  # 常见拼写变体(卖家精灵抓的买家错拼)
+def ip_in_st(st):
+    t=" "+st.lower().replace(",", " ").replace("/", " ")+" "
+    hits=[]
+    for p in IP_STRICT+IP_MIS:
+        if p in t: hits.append(p.strip())
+    return sorted(set(hits))
+
+def audit14(meta, L, rows):
+    """meta: dict(product/site/asin/store/op/cat/brand/ip_assoc). rows: 表1 record dict 列表(已按站点过滤)."""
+    cat=meta["cat"]; brand=meta.get("brand","")
+    full=L["title"]+" "+" ".join(L["bullets"])+" "+L["desc"]
+    supp=supported_machines(full,cat); soft=supports_soft(full+" "+L["st"])
+    tt=set(toks(L["title"])); bt=set()
+    for b in L["bullets"]: bt|=set(toks(b))
+    dt=set(toks(L["desc"])); stt=set(toks(L["st"])); front=tt|bt|dt
+    def cov(kw,s): k=toks(kw); return bool(k) and all(w in s for w in k)
+    R=[]
+    for f in rows:
+        kw=ext(f.get("关键词"))
+        R.append({"kw":kw,"mx":f.get("矩阵"),"vol":float(ext(f.get("月搜索量")) or 0),"ord":float(ext(f.get("已出单单量")) or 0),
+                  "rank":float(ext(f.get("我方自然排名")) or 0),"front":cov(kw,front),"instr":cov(kw,stt),"qual":qualify_embed(kw,cat,supp,soft)})
+    total=len(R); embedded=sum(1 for r in R if r["front"] or r["instr"])
+    rk=[r for r in R if r["rank"]>0]; p1=[r for r in rk if r["rank"]<=16]; p23=[r for r in rk if 16<r["rank"]<=48]; deep=[r for r in rk if r["rank"]>48]
+    sens=lambda r: r["mx"] in ("IP词","品牌词-竞品") or is_ip(r["kw"]) or is_comp(r["kw"]) or is_trademark(r["kw"])
+    ugc=[r for r in R if sens(r)]; embeddable=[r for r in R if r["qual"] and not sens(r)]; noise=[r for r in R if (not r["qual"]) and not sens(r)]
+    fit=len(embeddable)+len(ugc)
+    miss=agg_roots(sorted([r for r in embeddable if not(r["front"] or r["instr"])],key=lambda r:-(r["vol"]+r["ord"]*5000)))
+    missu=sorted([r for r in ugc if not(r["front"] or r["instr"])],key=lambda r:-(r["vol"]+r["ord"]*5000))
+    nz=sorted(noise,key=lambda r:-r["vol"])
+    # listing 健康
+    be=len(L["bullets"])==0; de=not L["desc"].strip(); se=not L["st"].strip(); buy="BUYABLE" in (L["status"] or [])
+    notext=(not L["title"].strip()) and be and de and se
+    nbul=len(L["bullets"])
+    # R2/R6 标题结构检查
+    tl=L["title"].lower()
+    miss_title=[]
+    if brand and brand.lower() not in tl: miss_title.append(f"品牌名 {brand}")
+    if "switch" in tl and "lite" not in tl and "lite" in supp: miss_title.append("机型 Lite")
+    # 🚨 R6 数据驱动(陈翔宇 2026-06-24): 查产品库该产品真实系列/灯效,只推它真有的。
+    # KS35 不在FUNLAB品牌库→vi=None→不推; 图鉴/小红包(FunVault/FunCase无RGB)→不推灯效; 蜂窝(Firefly+RGB)→推 Hidden Glow+Firefly。
+    vi=funlab_vi(meta.get("品牌型号")) if brand.upper()=="FUNLAB" else None
+    if vi and vi["rgb"]:   # 只对「产品库确认有RGB灯效」的FUNLAB灯系列(Firefly/Luminex/Luminpad…)推官方术语
+        if vi["series"] and not any(x in tl for x in FUNLAB_SERIES):
+            miss_title.append(f"系列英文名 {vi['series']}(产品库官方系列)")
+        if not any(x in tl for x in FUNLAB_LIGHT) and any(x in tl for x in ["rgb","led","light","licht","lumière","luz","glow"]):
+            miss_title.append("灯效官方名 Hidden Glow(现用泛词 RGB/LED)")
+    # R3 场景词
+    SCENE=["competitive","handheld","tv","living room","travel","gift","cadeau","geschenk","regalo","wettkampf","unterwegs","nomade","competiti","sofa","couch"]
+    has_scene=any(w in (L["desc"]+" "+" ".join(L["bullets"])).lower() for w in SCENE)
+    # C2 五点 痛点/售后
+    blob=" ".join(L["bullets"]).lower()
+    has_pain=any(w in blob for w in ["drift","no more","tired","fini","kein ","genervt","problem","stop "])
+    has_after=any(w in blob for w in ["warranty","garantie","garantía","garanzia","support","refund","customer service","kundenservice","service client"])
+    # ST 问题检测
+    st_ip=ip_in_st(L["st"]); st_mis=[w for w in re.findall(r'[a-z]+',L["st"].lower()) if is_misspell(w)]
+    # 标题/五点 含 IP/商标(比 ST 更严重: 前台直接侵权)
+    tb_text=(L["title"]+" "+" ".join(L["bullets"]))
+    front_ip=ip_in_st(tb_text); front_tm=is_trademark(tb_text); front_comp=is_comp(tb_text)
+    # 自动建议 ST 草稿: 现ST去坏词 + 补漏埋top
+    def st_tokens(s):
+        seen=set(); out=[]
+        for w in re.findall(r"[A-Za-zÀ-ÿ0-9'\-]+",s):
+            lw=w.lower()
+            if lw in seen: continue
+            seen.add(lw); out.append(w)
+        return out
+    bad=set(st_ip)|set(st_mis)
+    kept=[w for w in st_tokens(L["st"]) if w.lower() not in bad and not is_comp(w) and not is_laptop_dock(w)]
+    sug=" ".join(kept)
+    # 种子 = 按价值降序的「全部可埋词」(含已埋核心词如 switch 2 pro controller / pro controller),
+    # 不只补漏埋——否则核心词若已在标题就永远进不了 ST(陈翔宇 2026-06-23: 蜂窝 MX/CA ST 漏了 pro)。
+    emb_sorted=sorted(embeddable,key=lambda r:-(r["vol"]+r["ord"]*5000))
+    for r in emb_sorted:
+        cur=set(x.lower() for x in st_tokens(sug))
+        kt=toks(r["kw"])
+        if kt and all(t in cur for t in kt): continue
+        add=(" "+r["kw"]).rstrip()
+        if by((sug+add).strip())>235: continue   # 用 continue 不 break: 长词放不下时让后面更短的高价值核心词仍能进
+        sug=(sug+add).strip()
+    # 核心重要词 · 全层覆盖(Frankie 2026-06-23: 重要核心词必须 标题/五点/描述/ST 四层都有→权重最大化)
+    def cv(kw,s): k=toks(kw); return bool(k) and all(w in s for w in k)
+    # 核心列表聚焦「产品定义词」(含品类锚点/卖点),剔除裸机型词(switch/switch lite 这类在各层本就有,列出无意义)
+    core_pool=[r for r in sorted(embeddable,key=lambda r:-(r["vol"]+r["ord"]*5000)) if not is_machine_compat(r["kw"])]
+    core_imp=[r for r in core_pool if r["vol"]>=1000][:10]
+    if len(core_imp)<6: core_imp=core_pool[:8]
+    core_cov=[{"kw":r["kw"],"vol":r["vol"],"t":cv(r["kw"],tt),"b":cv(r["kw"],bt),"d":cv(r["kw"],dt),"s":cv(r["kw"],stt)} for r in core_imp]
+    core_gap=sum(1 for c in core_cov if not(c["t"] and c["b"] and c["d"] and c["s"]))
+    # IP 联想(产品库 ip_assoc + 词库 IP词)
+    ip_words=sorted({ext(r["kw"]) if isinstance(r["kw"],str) else r["kw"] for r in ugc if (is_ip(r["kw"]) or r["mx"]=="IP词")},key=lambda x:0)
+    ip_lib=[r["kw"] for r in sorted(ugc,key=lambda r:-r["vol"]) if (is_ip(r["kw"]) or r["mx"]=="IP词")][:8]
+    return dict(total=total,recorded=len(rk),p1=len(p1),p23=len(p23),deep=len(deep),embedded=embedded,
+        cover_pct=round(100.0*embedded/max(total,1)),rec_pct=round(100.0*len(rk)/max(total,1)),
+        fit=fit,n_embeddable=len(embeddable),n_ugc=len(ugc),
+        miss=miss[:20],missu=missu[:12],noise=nz[:15],supp=supp,soft=soft,
+        nbul=nbul,be=be,de=de,se=se,buy=buy,notext=notext,authored=L.get("authored",True),has_record=L.get("has_record",True),
+        miss_title=miss_title,has_scene=has_scene,has_pain=has_pain,has_after=has_after,
+        st_ip=st_ip,st_mis=st_mis,st_sug=sug,st_sug_bytes=by(sug),ip_lib=ip_lib,
+        front_ip=front_ip,front_tm=front_tm,front_comp=front_comp,core_cov=core_cov,core_gap=core_gap)
+
+def render14(meta,L,a):
+    site=meta["site"]; cat=meta["cat"]; brand=meta.get("brand","")
+    h=[]
+    h.append(f"""<!DOCTYPE html><html lang=zh><head><meta charset=UTF-8><meta name=viewport content="width=device-width,initial-scale=1">
+<title>{esc(meta['product'])} {site} · 14维 listing 审计</title><style>
+body{{background:#0d0d10;color:#e8e8ea;font-family:-apple-system,'Segoe UI',Roboto,'Microsoft YaHei',sans-serif;margin:0;padding:26px;line-height:1.6}}
+.wrap{{max-width:1060px;margin:0 auto}}
+h1{{color:{A};font-size:22px;border-bottom:2px solid {A};padding-bottom:10px}}
+h2{{color:{A};font-size:17px;margin-top:30px;border-left:4px solid {A};padding-left:10px}}
+.sub{{color:#9a9aa0;font-size:12.5px;font-family:Consolas,monospace}}
+table{{width:100%;border-collapse:collapse;margin:10px 0;font-size:13px}}
+th,td{{border:1px solid #2a2a30;padding:7px 9px;text-align:left;vertical-align:top}}
+th{{background:#16161b;color:{A}}} tr:nth-child(even){{background:#131318}}
+.old{{color:#c98a8a}}.new{{color:#8fe6c8}}.kw{{color:{A};font-size:12px}}.num{{text-align:right;color:{A};font-weight:600}}
+.box{{background:#131318;border:1px solid #2a2a30;border-radius:8px;padding:12px 16px;margin:10px 0}}
+.red{{color:#ff5c66}}.warn{{color:#ffb454}}.grn{{color:#28d6a3}}
+.stat{{display:inline-block;min-width:150px;background:#171a21;border:1px solid #2a2a30;border-radius:10px;padding:12px 14px;margin:4px}}
+.stat .n{{font-size:26px;font-weight:700;color:{A}}}.stat .l{{color:#9a9aa0;font-size:12px}}
+code{{background:#1a1a20;padding:1px 5px;border-radius:3px;color:#cfcfd4;font-size:12px}}
+.tier b{{font-size:18px}}
+</style></head><body><div class=wrap>""")
+    h.append(f"<h1>{esc(meta['product'])} · {site} · Listing 系统化审计(14维)</h1>")
+    h.append(f"<p class=sub>店 {esc(meta['store'])} / sku {esc(meta['sku'])} / ASIN {meta['asin']} · 品类 {cat} · 负责运营 {meta['op']} · 2026-06-23 · 自动生成(数据驱动)</p>")
+    # 完备性
+    h.append(f"<div class=box><b>📋 这次审计覆盖了什么</b><br>✅ 已审(数据驱动):埋词覆盖·收录分层·后台搜索词·机型兼容·品牌名·合规·IP联想 ｜ 🖼 需人看图:主图·A+ ｜ 📝 需运营后台看:评价星级·QA数·差评·售价 ｜ ✍ 需运营改写(本站给结构指引,主力产品才出精修稿):标题/五点/描述 prose ｜ ⚪ 没做:AI推荐池·毛利<br><span class=sub>词库 {a['total']} 词 ｜ 埋词覆盖 {a['cover_pct']}% ｜ 已收录(有自然排名){a['recorded']} 词</span></div>")
+    # 头号问题
+    banner=[]
+    if not a["has_record"]: banner.append("🟡 该 sku 在本店无 listing 记录(纯跟卖/sku 错)→ 埋词需先自建独立 listing")
+    elif not a["authored"]: banner.append("🟡 本店未自建文案(跟卖他人 ASIN)→ 要埋词须自建独立 listing")
+    elif a["notext"]: banner.append("🔴 listing 文案全空 → 请运营核实后台是否建全")
+    elif a["be"] or a["de"] or a["se"] or not a["buy"]:
+        mp=[x for x,c in [("五点空",a["be"]),("描述空",a["de"]),("后台ST空",a["se"]),("非BUYABLE",not a["buy"])] if c]
+        banner.append("🔴 listing 是半成品："+" / ".join(mp)+" → 先补全文案/上架可售")
+    if a["front_ip"]: banner.append(f"🔴 标题/五点里有 IP/疑似IP词 <code class=red>{esc(', '.join(a['front_ip']))}</code> 写在前台 → 侵权风险最高,建议改成描述性词或移走(IP 联想只走买家 Review/QA)")
+    if a["st_ip"]: banner.append(f"🔴 后台搜索词 ST 里有 IP/疑似IP词 <code class=red>{esc(', '.join(a['st_ip']))}</code> 写在线上 → 侵权风险,建议尽快删(IP 联想只走买家 Review/QA)")
+    if a["st_mis"]: banner.append(f"🟠 后台 ST 有拼写错词 <code class=warn>{esc(', '.join(set(a['st_mis'])))}</code> → 删或改正")
+    if banner:
+        h.append("<div class=box style='border-color:#ff5c66;background:#2a161a'><b class=red>🔴 头号问题(优先处理)</b><ul style='margin:6px 0'>"+"".join(f"<li>{b}</li>" for b in banner)+"</ul></div>")
+    # 三关键数
+    h.append("<h2>📊 三个关键数（别混）</h2><div>"
+     f"<span class=stat><div class=n>{a['total']}</div><div class=l>候选池(词库总词)<br>含待校验噪音</div></span>"
+     f"<span class=stat><div class=n>{a['recorded']}</div><div class=l>✅ 已收录(有自然排名)<br>占候选 {a['rec_pct']}%</div></span>"
+     f"<span class=stat><div class=n>{a['embedded']}</div><div class=l>已埋(进文案)<br>占候选 {a['cover_pct']}%</div></span>"
+     f"<span class=stat><div class=n>{a['fit']}</div><div class=l>合适词(剔噪后)<br>直写{a['n_embeddable']}+UGC{a['n_ugc']}</div></span></div>")
+    h.append(f"<div class=box class=tier>已收录 {a['recorded']} 词分层 → 首页(≤16名) <b class=grn>{a['p1']}</b> ｜ 2-3页(17-48) <b class=warn>{a['p23']}</b> ｜ 靠后(&gt;48) <b class=red>{a['deep']}</b><br><span class=sub>收录≠首页:有排名里只 {a['p1']} 个在首页。万词目标=把合适漏埋词推进收录 + 把靠后词往首页推。{'(本站排名监控刚起步,收录数偏小=种子,非全量)' if a['recorded']<8 else ''}</span></div>")
+    # 14维诊断
+    GN="<span class=grn>✅ 没问题</span>"; CH="<span class=new>✅ 已诊断</span>"; HU="🖼 需人看图"; OP="📝 需运营补"; RW="✍ 需运营改写"
+    miss_t=("、".join(a["miss_title"]) if a["miss_title"] else "")
+    diag=[
+     ("埋词覆盖",f"{a['embedded']} 个目标词已进文案(覆盖 {a['cover_pct']}%);下方『漏埋补词清单』是剔噪后可直写补的高价值词",CH),
+     ("标题关键词顺序",(f"标题缺:<b class=warn>{esc(miss_t)}</b> → 建议结构见下『标题诊断』" if miss_t else "标题已含品牌+核心词+机型,顺序合理"),(RW if miss_t else GN)),
+     ("人群/使用场景",("文案已含场景/人群词" if a["has_scene"] else "文案只罗列功能,缺『给谁用/什么场景/送礼』→ 描述补场景句"),(GN if a["has_scene"] else RW)),
+     ("后台搜索词",("ST 有问题(见头号问题)→ 用下方『建议ST草稿』替换" if (a["st_ip"] or a["st_mis"]) else "ST 已填;下方给『建议ST草稿』(去噪+补漏埋top)"),(RW if (a["st_ip"] or a["st_mis"]) else CH)),
+     ("兼容机型",f"本品支持机型推导={'/'.join(sorted(a['supp'])) or '2'};{'标题缺 Lite 已在标题诊断提示' if any('Lite' in m for m in a['miss_title']) else '机型词写全'}",CH),
+     ("品牌官方叫法",(f"缺:<b class=warn>{esc(miss_t)}</b>(品牌词 SEO+品牌光环)" if miss_t else "品牌官方叫法已用"),(RW if miss_t else GN)),
+     ("标题首屏","标题开头(手机可见部分)建议含核心词+机型,关键信息别挤到尾部",CH),
+     ("五点结构",f"现 <b>{a['nbul']}</b> 条;"+(("缺痛点开头;" if not a['has_pain'] else "")+("缺信任/售后段;" if not a['has_after'] else "")+("条数偏少(可写6-7条);" if a['nbul']<6 else "")+"建议:1-3痛点+核心 / 4惊喜差异化 / 5唤醒 / 6售后保障,别为凑5条牺牲埋词").rstrip("；")+"",(RW if (not a['has_pain'] or not a['has_after'] or a['nbul']<5) else CH)),
+     ("主图/附图","系统只看缩略图;需人核:主图纯白底+商品占满+附图够不够场景/痛点对比图",HU),
+     ("A+ 图文","需做 A+『问题-解决方案』结构 + 竞品对比表(Rufus 友好)",HU),
+     ("售价","本次未拉 mws/listing,售价需运营后台看",OP),
+     ("评价/星级","需运营后台看评价数/星级;>4.5★ 亚马逊 AI 导购更愿推",OP),
+     ("买家问答 QA","需运营后台看 QA 够不够 50 条;QA 能『借买家的嘴』提不能写进文案的词",OP),
+     ("差评","需导差评,把抱怨点改进到五点和图",OP),
+     ("AI推荐池/毛利","本次没做,需单独拉","⚪ 本次没做"),
+     ("listing健康+合规",
+      ("🔴 标题/五点有 IP 词需改(见上)" if a["front_ip"] else
+       ("🔴 ST 有 IP/拼写问题需改(见上)" if a["st_ip"] else
+        ("🔴 半成品/跟卖见上" if (a['be'] or a['de'] or a['se'] or not a['buy'] or not a['authored'] or not a['has_record']) else
+         ("🟠 标题/五点含 nintendo 商标 → 兼容措辞 for/compatible 可,裸写品牌名建议改 for Switch 2" if a["front_tm"] else
+          ("🟠 标题/五点含竞品品牌 → 建议移走(走 SD 商品定投打竞品)" if a["front_comp"] else "状态可售,合规无裸写品牌/IP"))))),
+      ("🔴 需改" if (a['front_ip'] or a['st_ip'] or a['be'] or a['de'] or a['se'] or not a['buy'] or not a['authored'] or not a['has_record']) else ("🟠 可优化" if (a['front_tm'] or a['front_comp']) else GN))),
+    ]
+    h.append("<h2>🩺 14 维诊断</h2><table><tr><th>维度</th><th>诊断</th><th>状态</th></tr>")
+    for d,t,s in diag: h.append(f"<tr><td><b>{esc(d)}</b></td><td>{t}</td><td>{s}</td></tr>")
+    h.append("</table>")
+    # 标题诊断
+    h.append("<h2>① 标题诊断（结构指引，运营改写）</h2>")
+    h.append(f"<div class=box><span class=old>现标题：</span><br>{esc(L['title'])}</div>")
+    if a["miss_title"]:
+        seg3=("卖点+灯效官方术语" if any("Hidden Glow" in m for m in a["miss_title"]) else "卖点")
+        h.append(f"<div class=box><span class=new>建议补：</span> <b class=warn>{esc('、'.join(a['miss_title']))}</b><br><span class=sub>推荐结构:段1(权重最高) 核心词+机型(本周主攻长尾词放这,达标后轮换) ｜ 段2 品牌+系列英文名+型号(查产品库该品牌型号) ｜ 段3 {seg3}。Capitalize Every Word。</span></div>")
+    else:
+        h.append("<div class=box class=grn>标题结构合理(品牌/核心词/机型齐全),可保持。</div>")
+    # 五点诊断
+    h.append("<h2>② 五点诊断（结构指引，运营改写）</h2>")
+    h.append(f"<div class=box>现 <b>{a['nbul']}</b> 条。"+("<span class=warn>缺痛点开头。</span>" if not a['has_pain'] else "")+("<span class=warn>缺信任/售后段。</span>" if not a['has_after'] else "")+("<span class=warn>条数偏少,可补到 6-7 条(别为凑 5 条牺牲埋词)。</span>" if a['nbul']<6 else "")+"<br><span class=sub>建议结构:① 痛点+核心词(如 No More Drift / hall effect) ② 痛点+差异化功能 ③ 核心+场景(机型/PC/手机) ④ 惊喜差异化锚点 ⑤ 唤醒/App 单独条 ⑥ 售后保障(保修+退换+客服)。把漏埋的关键词变体铺进各条。</span></div>")
+    # ④ ST 建议草稿
+    h.append("<h2>③ 后台搜索词 ST · 建议草稿（可直接抄，运营按本地语言微调）</h2>")
+    h.append(f"<div class=box><span class=old>现 ST：</span><br>{esc(L['st']) or '（空）'}</div>")
+    if a["st_ip"] or a["st_mis"]:
+        h.append(f"<div class=box><b class=red>删：</b> {esc(', '.join(list(a['st_ip'])+list(set(a['st_mis']))))}（IP/拼写错词,侵权或低质）</div>")
+    h.append(f"<div class=box><span class=new>建议 ST 草稿（去噪+补漏埋高价值词，{a['st_sug_bytes']} 字节，≤250）：</span><br><b>{esc(a['st_sug'])}</b><br><br><span class=sub>已去 IP/拼写错/竞品词;补了下方漏埋 Top 词。nintendo 如要保留只用兼容措辞 compatible with/for；运营按本地语言核对通顺度。</span></div>")
+    # 核心重要词 · 全层覆盖(Frankie 铁律)
+    h.append("<h2>🎯 核心重要词 · 全层覆盖检查（权重最大化）</h2><div class=sub>🚨 Frankie 铁律:<b>重要核心词必须在 标题 / 五点 / 描述 / 后台ST 四层都有</b>,权重才最大化。下表 <span class=red>✗</span> = 该层缺,建议补上(核心词重复出现在各层不算堆词,是有意强化)。</div>")
+    h.append("<table><tr><th>核心词</th><th class=num>月搜量</th><th>标题</th><th>五点</th><th>描述</th><th>ST</th><th>缺哪层 → 补</th></tr>")
+    for c in a["core_cov"]:
+        mk=lambda b:"✅" if b else "<span class=red>✗</span>"
+        miss=[n for n,b in [("标题",c["t"]),("五点",c["b"]),("描述",c["d"]),("ST",c["s"])] if not b]
+        v="{:,}".format(int(c["vol"])) if c["vol"] else "—"
+        h.append(f"<tr><td class=kw>{esc(c['kw'])}</td><td class=num>{v}</td><td>{mk(c['t'])}</td><td>{mk(c['b'])}</td><td>{mk(c['d'])}</td><td>{mk(c['s'])}</td><td class=warn>{('、'.join(miss)) if miss else '四层全有 ✅'}</td></tr>")
+    h.append("</table>")
+    if a["core_gap"]:
+        h.append(f"<div class=box class=warn>⚠️ 有 {a['core_gap']} 个核心词没做到四层全覆盖 → 按上表把缺的层补上(标题靠前、五点铺进各条、描述自然嵌、ST 收尾),权重最大化。</div>")
+    # 漏埋补词
+    h.append("<h2>📌 高价值漏埋词根 Top20 · 可直写补埋</h2><div class=sub>已按差异化词根聚合(机型变体合并,不堆词);商标/竞品/IP/游戏/别平台/拼写变体已排除。月搜量为同根累加。</div>")
+    h.append("<table><tr><th>关键词</th><th>矩阵</th><th class=num>月搜量</th><th class=num>已出单</th></tr>")
+    for r in a["miss"]:
+        v="{:,}".format(int(r["vol"])) if r["vol"] else "—"; o=str(int(r["ord"])) if r["ord"] else "—"
+        h.append(f"<tr><td class=kw>{esc(r['kw'])}</td><td>{esc(r['mx'] or '')}</td><td class=num>{v}</td><td class=num>{o}</td></tr>")
+    h.append("</table>")
+    # IP UGC
+    h.append("<h2>🚫 IP / 敏感词 · UGC 埋词建议（不进 listing，走 Review/QA）</h2>")
+    if meta.get("licensed"):
+        h.append(f"<div class=box class=grn>✅ 本品是 <b>{esc(meta.get('ip_assoc') or '官方授权联名')}</b> —— 授权 IP 词<b>可直写</b>进标题/五点/描述/ST(非 UGC),应主动埋(品牌联名 SEO)。下方 UGC 仅针对<b>未授权</b> IP/商标/竞品。</div>")
+    if meta.get("ip_assoc") and not meta.get("licensed"):
+        h.append(f"<div class=box><b>本品 IP 联想（产品库）：</b> {esc(meta['ip_assoc'])} → 绝不直写进 listing,靠买家 Review/QA 自然提</div>")
+    elif a["ip_lib"]:
+        h.append(f"<div class=box><b>词库里出现的 IP/敏感词（买家在搜）：</b> {esc('、'.join(a['ip_lib']))} → 走 UGC 不直写。<br><b class=warn>⚠️ 产品库『适配IP/IP联想』字段为空,请运营/Frankie 确认这款外观/纹路让买家联想哪个 IP,确认后回填产品库(以后自动读)。</b></div>")
+    else:
+        h.append("<div class=box class=warn>⚠️ 词库无明显 IP 词 + 产品库『适配IP/IP联想』字段为空 → 这款外观/纹路让买家联想哪个 IP?请运营/Frankie 确认后回填产品库。</div>")
+    h.append("<table><tr><th>类别</th><th>不能直写原因</th><th>UGC 怎么捕</th></tr>"
+     "<tr><td>未授权 IP 联想(角色/形象)</td><td>未授权 IP,产品库合规-无IP=抽象纹路</td><td>寄样 brief 引导测评人/买家提;QA 自问自答(用描述性联想词非商标原名)</td></tr>"
+     "<tr><td>nintendo / joy-con</td><td>商标(兼容措辞 compatible with 可,品牌名不裸写)</td><td>Review/QA 自然提及</td></tr>"
+     "<tr><td>竞品 8bitdo/gamesir…</td><td>商标+禁比较</td><td>UGC + SD 商品定投打竞品 ASIN</td></tr></table>")
+    h.append("<div class=box><b class=warn>⚠️ IP 风险护栏</b>:即便合规-无IP,UGC 里直接点名未授权商标原名仍可能招投诉——更稳引导<b>描述性联想词</b>(如 honeycomb/hive/bug-themed)而非商标原名;点名与否由运营按风险偏好定。</div>")
+    # 噪音
+    if a["noise"]:
+        h.append("<h2>🗑 候选池噪音（运营在表1「矩阵」校验，不必埋）</h2><table><tr><th>关键词</th><th>判定</th><th class=num>月搜量</th></tr>")
+        for r in a["noise"]:
+            lab=("拼写变体→广告可投" if is_misspell(r["kw"]) else ("笔记本/PC扩展坞→别品类" if is_laptop_dock(r["kw"]) else (str(r["mx"] or "")+"→疑噪")))
+            v="{:,}".format(int(r["vol"])) if r["vol"] else "—"
+            h.append(f"<tr><td class=kw style='color:#8b94a3'>{esc(r['kw'])}</td><td>{esc(lab)}</td><td class=num>{v}</td></tr>")
+        h.append("</table>")
+    h.append("<div class=box class=sub>铁律:本报告为优化建议草稿,AI 不直接改线上 listing;标题/五点/描述的 prose 改写由运营按上方结构+补词清单操作(主力产品我们出精修稿)。上线动作经运营/Frankie 确认走领星后台。</div>")
+    h.append("</div></body></html>")
+    return "".join(h)
+
 app=FastAPI()
 @app.get("/")
 def root(): return {"service":"wanci-onboard","ok":True}
@@ -887,6 +1174,29 @@ def selftest():
     try:
         n=len(lall(REG_APP,APPLY_TB)); return {"ok":True,"apply_rows":n,"lx":lx("/erp/sc/data/seller/lists",{}).get("code")}
     except Exception as e: return {"ok":False,"err":str(e)}
+@app.get("/report")
+def report(asin:str, site:str):
+    try:
+        row=None
+        for r in lall(REG_APP,REG_TB):
+            f=r["fields"]
+            if ext(f.get("ASIN"))==asin and f.get("站点")==site: row=f; break
+        if not row: return HTMLResponse(f"<h1>未找到 {esc(asin)} / {esc(site)} 的作战台登记</h1>",status_code=404)
+        product=ext(row.get("产品")); cat=ext(row.get("品类")) or "controller"; op=ext(row.get("负责运营"))
+        sid=int(ext(row.get("店铺sid")) or 0); sku=ext(row.get("seller_sku"))
+        app2=ext(row.get("作战台App_token")); t1=ext(row.get("词库表id"))
+        if not sku and sid: sku=lookup_sku(sid,asin)
+        brand,ip_assoc,licensed,bxh=PRODUCT_META.get(product,("","",False,""))
+        meta=dict(product=product,site=site,asin=asin,sid=sid,sku=sku,app=app2,t1=t1,cat=cat,op=op,
+                  store=STORE14.get(sid,str(sid)),brand=brand,ip_assoc=ip_assoc,licensed=licensed)
+        meta["品牌型号"]=bxh
+        d=lx("/listing/publish/openapi/amazon/product/search",{"store_id":sid,"skus":[sku]})
+        L=load_listing(d)
+        rows=[x["fields"] for x in lall(app2,t1) if ext(x["fields"].get("站点")) in ("",site)]
+        a=audit14(meta,L,rows)
+        return HTMLResponse(render14(meta,L,a))
+    except Exception as e:
+        return HTMLResponse(f"<h1>报告生成失败</h1><pre>{esc(str(e))}</pre>",status_code=500)
 @app.post("/onboard")
 async def onboard(req:Request):
     if AUTH_TOKEN and req.headers.get("authorization","")!="Bearer "+AUTH_TOKEN: return {"ok":False,"err":"unauthorized"}
