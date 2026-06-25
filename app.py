@@ -16,6 +16,7 @@ APPLY_TB=os.environ.get("WANCI_APPLY_TB","tblPXS4uO8lK9p5g")
 RANK_BASE=os.environ.get("WANCI_RANK_BASE","EEKNbZ8b8aqv6msOaTscotBDn5f")
 SNAP_TB=os.environ.get("WANCI_SNAP_TB","tbl3OipVxS8wyjKk")  # 万词周快照表(总台App内)
 TARGET_ACOS=float(os.environ.get("WANCI_TARGET_ACOS","35"))  # 目标ACoS%(默认35,低于食人花dock~40盈亏平衡;判提预算/优化的阈值)
+GUIDANCE_DAYS=int(os.environ.get("WANCI_GUIDANCE_DAYS","14"))  # 指导时间(天):14维建议发出N天后审执行,逾期未改listing/未开广告→催办
 def ad_verdict(acos,sal):
     """广告表现判定(供"是否值得提预算"):盈利(ACoS≤target)=健康;否则需优化。"""
     if sal<=0: return "无成交"
@@ -781,10 +782,11 @@ def do_review(frankie_only=False,dry=False):
         return _perfc[sid]
     reg=[r for r in lall(REG_APP,REG_TB) if r["fields"].get("状态") in ("在跑","筹备")]
     snaps=lall(REG_APP,SNAP_TB)
-    prev={}
+    prev={}; first={}
     for s in snaps:
         f=s["fields"]; k=(ext(f.get("ASIN")),f.get("站点")); ts=f.get("快照时间") or 0
         if k not in prev or ts>prev[k][0]: prev[k]=(ts,f)
+        if k not in first or ts<first[k][0]: first[k]=(ts,f)
     now=int(time.time()*1000); per_op={}; new_snap=[]; errors=[]
     for r in reg:
         f=r["fields"]
@@ -826,10 +828,22 @@ def do_review(frankie_only=False,dry=False):
             if pv:
                 d_cov=m["cover_pct"]-_pn(pv.get("埋词覆盖率")); d_rec=m["recorded"]-_pn(pv.get("已收录")); d_p1=m["p1"]-_pn(pv.get("首页"))
             else: d_cov=d_rec=d_p1=0
+            # 执行SLA(2026-06-25): 指导时间内有没有按14维建议执行(埋词/五点/ST/广告/文案建全)。基线=最早快照(≈指导发出时)
+            fs=first.get((asin,site)); base_ts=fs[0] if fs else now
+            base_cov=_pn(fs[1].get("埋词覆盖率")) if fs else m["cover_pct"]
+            days_since=int((now-base_ts)/86400000); todo=[]
+            if m["status"]!="正常": todo.append(f"文案没建全({m['status']})")
+            else:
+                if m["cover_pct"]<=base_cov and m["miss"]: todo.append(f"埋词{days_since}天没提升(还{len(m['miss'])}个高价值漏埋没补)")
+                if len(L["bullets"])<5: todo.append(f"五点仅{len(L['bullets'])}条<5")
+                if not L["st"].strip(): todo.append("后台ST空")
+            if derelict: todo.append("广告未开")
+            overdue=days_since>=GUIDANCE_DAYS and bool(todo); exec_status=("已执行" if not todo else ("逾期未执行" if overdue else "部分执行"))
             res={"product":product,"site":site,"region":region,"op":op,"asin":asin,"haverank":haverank,
                  "m":m,"first":not pv,"d_cov":d_cov,"d_rec":d_rec,"d_p1":d_p1,
                  "bsr":bsr,"fba":fba,"thirty":thirty,"impr7":impr7,"impr2":impr2,"serving":serving,"ran7":ran7,
-                 "derelict":derelict,"paused_recent":paused_recent,"cost":cost,"acos":acos,"ctr":ctr,"cvr":cvr,"perf_v":perf_v,"budget_advice":budget_advice}
+                 "derelict":derelict,"paused_recent":paused_recent,"cost":cost,"acos":acos,"ctr":ctr,"cvr":cvr,"perf_v":perf_v,"budget_advice":budget_advice,
+                 "days_since":days_since,"todo":todo,"overdue":overdue,"exec_status":exec_status}
             per_op.setdefault(op,[]).append(res)
             new_snap.append({"快照键":f"{asin}-{site}-{now}","产品":product,"站点":site,"ASIN":asin,"区域":region,"负责运营":op,
                 "候选数":m["total"],"已收录":m["recorded"],"首页":m["p1"],"2-3页":m["p23"],"靠后":m["deep"],"已埋":m["embedded"],
@@ -855,6 +869,7 @@ def do_review(frankie_only=False,dry=False):
                 elif not it["haverank"]: lines.append("  ⚪ 收录追踪未铺开(以埋词覆盖率为准)")
                 if m["miss"]: lines.append("  📌 漏埋高价值: "+" / ".join(x["kw"] for x in m["miss"][:4]))
                 if not it["first"] and it["d_cov"]<0: lines.append("  ⚠️ 埋词覆盖**退步**,核对是否改 listing 改丢了词")
+                if it.get("overdue"): lines.append(f"  ⏰ **指导逾期{it['days_since']}天还没执行**: {' / '.join(it['todo'])} → 请按14维建议改 listing / 开广告")
                 if it.get("derelict"): lines.append(f"  🔴 **失职**: 有货(FBA{it['fba']})+BSR#{it['bsr']} 但 **近7天0广告曝光**(没在投) → 立即开广告")
                 elif it.get("paused_recent"): lines.append(f"  🟠 **近期停投**: 近2天0曝光(7天花过${it['cost']}) → {it['budget_advice']}")
                 elif it.get("serving"):
@@ -873,10 +888,13 @@ def do_review(frankie_only=False,dry=False):
         derel=[x for x in allr if x.get("derelict")]; budg=[x for x in allr if x.get("paused_recent")]
         L4=[f"🔴 {x['product']} {x['site']}: FBA{x['fba']}有货+BSR#{x['bsr']} 但近7天0广告曝光 — 催 {x['op']}" for x in derel] or ["（无）"]
         L5=[f"🟠 {x['product']} {x['site']}: 近期停投 — {x['budget_advice']}({x['op']})" for x in budg] or ["（无）"]
+        overdue_list=[x for x in allr if x.get("overdue")]
+        L6=[f"⏰ {x['product']} {x['site']}: 逾期{x['days_since']}天 — {' / '.join(x['todo'])} — 催 {x['op']}" for x in overdue_list] or ["（无逾期未执行）"]
         base="(首轮=建立基线,delta 下周起有效)" if all(x["first"] for x in allr) else ""
         md=(f"**{day} 万词周自检总览** · {len(allr)}个作战台 {base}\n\n"
             f"**🔴 运营失职·有货有排名却近7天0广告曝光 {len(derel)}**\n"+"\n".join(L4)
             +f"\n\n**🟠 近期停投·近2天0曝光(查预算/误暂停) {len(budg)}**\n"+"\n".join(L5)
+            +f"\n\n**⏰ 指导逾期未执行·过{GUIDANCE_DAYS}天还没按14维建议改listing/开广告 {len(overdue_list)}**\n"+"\n".join(L6)
             +f"\n\n**📈 埋词改善 {len(improved)}**\n"+"\n".join(L1)+f"\n\n**🚨 listing卡住 {len(stuck)}**\n"+"\n".join(L2)
             +(f"\n\n**⚠️ 异常 {len(errors)}**: "+" / ".join(errors[:8]) if errors else "")
             +f"\n\n> 广告判定**全部基于报表实际曝光**(spProductAdReports per-asin,可靠;实体接口分页坑已弃用)。失职=有货≥10+有BSR+近7天0曝光;近期停投=7天投过但近2天0曝光。预算建议按ACoS:≤{int(TARGET_ACOS)}%健康才提,高/无成交→先优化。均豁免断货/非BUYABLE。")
