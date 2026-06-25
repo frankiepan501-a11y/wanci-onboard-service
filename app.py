@@ -16,7 +16,7 @@ APPLY_TB=os.environ.get("WANCI_APPLY_TB","tblPXS4uO8lK9p5g")
 RANK_BASE=os.environ.get("WANCI_RANK_BASE","EEKNbZ8b8aqv6msOaTscotBDn5f")
 SNAP_TB=os.environ.get("WANCI_SNAP_TB","tbl3OipVxS8wyjKk")  # 万词周快照表(总台App内)
 TARGET_ACOS=float(os.environ.get("WANCI_TARGET_ACOS","35"))  # 目标ACoS%(默认35,低于食人花dock~40盈亏平衡;判提预算/优化的阈值)
-GUIDANCE_DAYS=int(os.environ.get("WANCI_GUIDANCE_DAYS","14"))  # 指导时间(天):14维建议发出N天后审执行,逾期未改listing/未开广告→催办
+GUIDANCE_DAYS=int(os.environ.get("WANCI_GUIDANCE_DAYS","7"))  # 指导时间(天,Frankie定7):14维建议发出N天后审执行,逾期未改listing/未开广告→催办
 def ad_verdict(acos,sal):
     """广告表现判定(供"是否值得提预算"):盈利(ACoS≤target)=健康;否则需优化。"""
     if sal<=0: return "无成交"
