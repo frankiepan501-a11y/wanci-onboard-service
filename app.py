@@ -659,6 +659,11 @@ def process(rid):
             c=classify_report(os.path.basename(x),asin,lin); files.setdefault(c,[]).append(x)
         log.append(f"报表 {len(xls)} 文件: self{len(files['self'])} comp{len(files['comp'])} mining{len(files['mining'])} aba{len(files['aba'])} sp_amz{len(files['sp_amz'])} sp_ss{len(files['sp_ss'])}")
         # 2. App
+        if not reuse:  # 防重: 该产品总台已有作战台→自动复用(运营不用填复用App_token,避免重复建作战台。阿坚 2026-06-27)
+            for r in lall(REG_APP,REG_TB):
+                rf=r["fields"]
+                if ext(rf.get("产品"))==product and ext(rf.get("作战台App_token")):
+                    reuse=ext(rf.get("作战台App_token")); log.append(f"自动复用已有作战台 {reuse}(产品已onboard过,不新建)"); break
         if reuse:
             app=reuse; t=api("GET",f"/bitable/v1/apps/{app}/tables?page_size=100")["data"]["items"]
             tm={x["name"]:x["table_id"] for x in t}
@@ -666,13 +671,13 @@ def process(rid):
         else:
             app,tm=clone_app(f"亚马逊万词作战台·{product}-{region}")
             T1=tm["表1·关键词词库"];T2=tm["表2·Listing埋词审计"];T3=tm["表3·广告计划建议"];T4=tm["表4·排名收录追踪"];T5=tm["表5·阶段目标与审计"];T6=tm["表6·否定词库"]
-        # 3. 导词库(幂等)
-        if not any(r["fields"].get("站点")==site for r in lall(app,T1)):
-            ensure_t1_extra(app,T1)
-            t1d,t4d=import_keywords(files,site,asin,cat)
-            batch(app,T1,t1d); batch(app,T4,t4d) if t4d else 0
-            log.append(f"导词库 表1={len(t1d)} 表4={len(t4d)}")
-        else: log.append("表1已有该站点,跳过导入")
+        # 3. 导词库(刷新语义:该站点已有词→清空重导,最新报表覆盖;支持运营重拉干净竞品后重新生成。阿坚 2026-06-27)
+        ensure_t1_extra(app,T1)
+        had=any(f["fields"].get("站点")==site for f in lall(app,T1))
+        clear(app,T1,lambda f,s=site:f.get("站点")==s); clear(app,T4,lambda f,s=site:f.get("站点")==s)
+        t1d,t4d=import_keywords(files,site,asin,cat)
+        batch(app,T1,t1d); batch(app,T4,t4d) if t4d else 0
+        log.append(f"导词库 表1={len(t1d)} 表4={len(t4d)}"+("(清旧重导刷新)" if had else ""))
         # 4. 登记总台(幂等)
         exist={(ext(x["fields"].get("ASIN")),x["fields"].get("站点")) for x in lall(REG_APP,REG_TB)}
         if (asin,site) not in exist:
