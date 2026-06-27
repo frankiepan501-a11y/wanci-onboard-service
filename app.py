@@ -613,14 +613,18 @@ DOMAIN={"US":1,"UK":2,"DE":3,"FR":4,"ES":8,"IT":9,"CA":6,"MX":10,"JP":7,"AU":12}
 # 站点→领星店铺country(中文) / 区域: 从ASIN+站点自动反查店铺,免运营手填sid/sku(阿坚反馈 2026-06-27 字段太多)
 SITE_CN={"US":"美国","UK":"英国","DE":"德国","FR":"法国","ES":"西班牙","IT":"意大利","CA":"加拿大","MX":"墨西哥","JP":"日本","AU":"澳洲","BR":"巴西"}
 SITE_REGION={"US":"北美","CA":"北美","MX":"北美","BR":"北美","UK":"欧洲","DE":"欧洲","FR":"欧洲","ES":"欧洲","IT":"欧洲"}
+MAIN_STORE=["fanlepu","funlabdirect","funlab","driesnaude","palpow","powkong"]  # 我方主力店名,优先扫(减少扫跟卖店2500条的慢+抖动)
 def resolve_store(asin,site):
-    """从 ASIN+站点 自动反查 (sid,seller_sku,store_name): 遍历该站领星店铺找拥有该ASIN(有seller_sku)的owner店。"""
+    """从 ASIN+站点 自动反查 (sid,seller_sku,store_name): 遍历该站领星店铺找拥有该ASIN(有seller_sku)的owner店。
+    优先我方主力店(Fanlepu/FunlabDirect等)→更快更稳;单店API出错跳过不阻断。"""
     cn=SITE_CN.get(site,site)
     try: sl=lx("/erp/sc/data/seller/lists",{}).get("data") or []
     except Exception: return None,None,None
     stores=[s for s in sl if s.get("country")==cn]
+    stores.sort(key=lambda s:0 if any(p in (s.get("name") or "").lower() for p in MAIN_STORE) else 1)
     for s in stores:
-        sku=lookup_sku(s["sid"],asin)
+        try: sku=lookup_sku(s["sid"],asin)
+        except Exception: continue  # 单店API抖动不阻断,试下一个
         if sku: return s["sid"],sku,(s.get("name") or f"sid{s['sid']}")
     return None,None,None
 # ───────────────── 主编排 ─────────────────
@@ -641,6 +645,8 @@ def process(rid):
             rsid,rsku,rstore=resolve_store(asin,site)
             if rsid:
                 sid=rsid; sku=sku or rsku; store=store or rstore
+                try: upd(REG_APP,APPLY_TB,rid,{"店铺sid":sid})  # 写回申请表让运营看到反查到的sid
+                except Exception: pass
                 log.append(f"自动反查店铺: sid={sid} sku={sku} 店={store}")
             else:
                 log.append("[WARN] 自动反查店铺失败(该ASIN不在该站任何领星店),需手填店铺sid")
