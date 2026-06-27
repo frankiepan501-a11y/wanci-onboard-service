@@ -934,6 +934,8 @@ def by(s): return len(s.encode("utf-8"))
 # 品牌官方术语(R6): FUNLAB 灯效官方名 / 系列
 FUNLAB_LIGHT=["hidden glow","hidden until lit"]
 FUNLAB_SERIES=["firefly","luminous","luminex","luminpad","luminite","funlite","lumi set"]
+# 品牌挂牌别名(Frankie 2026-06-27): 欧洲FUNLAB产品早期无FUNLAB品牌备案→挂PALPOW销售获A+权限。真实品牌仍FUNLAB(驱动系列/灯效术语),但标题用PALPOW备案→标题有FUNLAB或PALPOW任一即算有品牌,不报缺。FUNLAB品牌词本身不强求进标题,品牌型号词/品牌卖点照用FUNLAB的。
+BRAND_ALIASES={"FUNLAB":["funlab","palpow"]}
 # R6 数据驱动: 查 FUNLAB 产品库(SKU库)拿该产品真实 系列英文名/型号英文名/有无RGB灯效。
 # 陈翔宇 2026-06-24: KS35 不在FUNLAB品牌库/没Hidden Glow,不能套用;Hidden Glow只对真有RGB灯效的产品(产品库RGB非空)。
 SKU_APP="MvtZb6OE9aJFaisO913cWSErnFe"; SKU_FUN="tblwJ3BRkIuHDuSK"
@@ -988,7 +990,8 @@ def audit14(meta, L, rows):
     # R2/R6 标题结构检查
     tl=L["title"].lower()
     miss_title=[]
-    if brand and brand.lower() not in tl: miss_title.append(f"品牌名 {brand}")
+    _balias=BRAND_ALIASES.get(brand.upper(),[brand.lower()]) if brand else []
+    if brand and not any(a in tl for a in _balias): miss_title.append(f"品牌名 {brand}"+("(或PALPOW欧洲挂牌)" if brand.upper()=="FUNLAB" else ""))
     if "switch" in tl and "lite" not in tl and "lite" in supp: miss_title.append("机型 Lite")
     # 🚨 R6 数据驱动(陈翔宇 2026-06-24): 查产品库该产品真实系列/灯效,只推它真有的。
     # KS35 不在FUNLAB品牌库→vi=None→不推; 图鉴/小红包(FunVault/FunCase无RGB)→不推灯效; 蜂窝(Firefly+RGB)→推 Hidden Glow+Firefly。
