@@ -610,6 +610,19 @@ def lookup_sku(sid,asin):
     return None
 
 DOMAIN={"US":1,"UK":2,"DE":3,"FR":4,"ES":8,"IT":9,"CA":6,"MX":10,"JP":7,"AU":12}
+# 站点→领星店铺country(中文) / 区域: 从ASIN+站点自动反查店铺,免运营手填sid/sku(阿坚反馈 2026-06-27 字段太多)
+SITE_CN={"US":"美国","UK":"英国","DE":"德国","FR":"法国","ES":"西班牙","IT":"意大利","CA":"加拿大","MX":"墨西哥","JP":"日本","AU":"澳洲","BR":"巴西"}
+SITE_REGION={"US":"北美","CA":"北美","MX":"北美","BR":"北美","UK":"欧洲","DE":"欧洲","FR":"欧洲","ES":"欧洲","IT":"欧洲"}
+def resolve_store(asin,site):
+    """从 ASIN+站点 自动反查 (sid,seller_sku,store_name): 遍历该站领星店铺找拥有该ASIN(有seller_sku)的owner店。"""
+    cn=SITE_CN.get(site,site)
+    try: sl=lx("/erp/sc/data/seller/lists",{}).get("data") or []
+    except Exception: return None,None,None
+    stores=[s for s in sl if s.get("country")==cn]
+    for s in stores:
+        sku=lookup_sku(s["sid"],asin)
+        if sku: return s["sid"],sku,(s.get("name") or f"sid{s['sid']}")
+    return None,None,None
 # ───────────────── 主编排 ─────────────────
 def process(rid):
     rec=api("GET",f"/bitable/v1/apps/{REG_APP}/tables/{APPLY_TB}/records/{rid}")["data"]["record"]["fields"]
@@ -619,9 +632,18 @@ def process(rid):
     reuse=g("复用App_token(可空,空=自动新建)"); domain=int(ext(rec.get("Sorftime_domain")) or DOMAIN.get(site,0))
     layout=rec.get("报表布局") or ""; lin="林明坚式" in layout
     store=g("店铺名") or ""
+    if not region: region=SITE_REGION.get(site,"欧洲")  # 区域从站点自动推
     upd(REG_APP,APPLY_TB,rid,{"状态":"处理中"})
     log=[]
     try:
+        # 自动反查店铺(运营只需填ASIN+站点,免手填sid/sku): 报表里本就有ASIN→领星反查owner店
+        if not sid:
+            rsid,rsku,rstore=resolve_store(asin,site)
+            if rsid:
+                sid=rsid; sku=sku or rsku; store=store or rstore
+                log.append(f"自动反查店铺: sid={sid} sku={sku} 店={store}")
+            else:
+                log.append("[WARN] 自动反查店铺失败(该ASIN不在该站任何领星店),需手填店铺sid")
         # 1. 下载+解压报表
         atts=rec.get("报表压缩包(zip)") or []
         tmp=tempfile.mkdtemp(prefix="wanci_")
