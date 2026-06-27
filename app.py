@@ -698,7 +698,8 @@ def process(rid):
             log.append("已登记总台")
         # 5. seller_sku + listing
         if not sku: sku=lookup_sku(sid,asin)
-        html_url=""
+        appurl=f"https://u1wpma3xuhr.feishu.cn/base/{app}"
+        oid=OP_OID.get(op)
         if sku:
             lr=lx("/listing/publish/openapi/amazon/product/search",{"store_id":sid,"skus":[sku]})
             L=load_listing(lr)
@@ -706,15 +707,19 @@ def process(rid):
             hp=os.path.join(tmp,f"audit_{asin}_{site}.html"); io.open(hp,"w",encoding="utf-8").write(html)
             n2,n3,n5,n6=fill_234(app,T1,T2,T3,T5,T6,L,cat,site)
             log.append(f"填表 表2={n2} 表3={n3} 表5={n5} 表6={n6}")
-            oid=OP_OID.get(op)
             if oid:
                 fk=upload_file(hp,f"{product}-{site}-listing审计.html")
-                im_text(oid,f"【万词·Listing审计】{product} {site} 作战台已建好+审计报告(HTML,浏览器开)请查收。作战台6表已填。")
+                im_text(oid,f"✅【万词·Listing审计完成】{product} {site} 作战台已建好+6表全填好+审计报告(HTML,浏览器开)请查收。")
                 im_file(oid,fk); log.append(f"已发运营 {op}")
-        else: log.append("⚠️ 查不到seller_sku,跳过审计(已建词库+登记)")
-        appurl=f"https://u1wpma3xuhr.feishu.cn/base/{app}"
-        upd(REG_APP,APPLY_TB,rid,{"状态":"已完成","处理结果":" | ".join(log)[:900],"作战台链接":{"link":appurl,"text":product+"-"+region}})
-        return {"ok":True,"app":app,"log":log}
+            final_status="已完成"
+        else:
+            # 跳过审计=未完成: 通知运营补救+状态设失败,不冒充"已完成"(Frankie 2026-06-27: 完成=全表填好+通知运营)
+            log.append("⚠️ 查不到seller_sku,跳过审计(词库已建,需补sid或查ASIN)")
+            if oid:
+                im_text(oid,f"⚠️【万词·需补充,未完成】{product} {site}：词库已导入(表1),但**审计没生成(表2/3/5/6空)**,因为系统在领星找不到这个ASIN({asin})的配对listing(店铺反查失败)。请：① 核对ASIN对不对 ② 或在申请表这行手填「店铺sid」 ③ 然后状态重设「待处理」重跑。作战台：{appurl}")
+            final_status="失败"
+        upd(REG_APP,APPLY_TB,rid,{"状态":final_status,"处理结果":" | ".join(log)[:900],"作战台链接":{"link":appurl,"text":product+"-"+region}})
+        return {"ok":sku is not None,"app":app,"log":log}
     except Exception as e:
         import traceback; tb=traceback.format_exc()[-800:]
         upd(REG_APP,APPLY_TB,rid,{"状态":"失败","处理结果":(" | ".join(log)+" | ERR "+str(e))[:900]})
