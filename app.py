@@ -598,7 +598,14 @@ def fill_234(app,t1,t2,t3,t5,t6,L,cat,site):
     return n2,n3,n5,n6
 
 def lookup_sku(sid,asin):
-    off=0
+    # asin 过滤一次命中(is_pair=1 让 asin 参数生效,免翻2500页;实测 2026-06-27)。失败回退分页扫。
+    try:
+        r=lx("/erp/sc/data/mws/listing",{"sid":sid,"asin":asin,"is_pair":1,"length":50,"offset":0})
+        for it in (r.get("data") or []):
+            if it.get("asin")==asin and it.get("seller_sku"): return it["seller_sku"]
+        if r.get("code")==0: return None  # 过滤生效但该店无此asin
+    except Exception: pass
+    off=0  # 回退: 分页扫(过滤异常时)
     while off<2500:
         r=lx("/erp/sc/data/mws/listing",{"sid":sid,"length":50,"offset":off})
         data=r.get("data") or []
