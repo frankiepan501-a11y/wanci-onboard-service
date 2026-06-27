@@ -207,13 +207,26 @@ PRICEg=["used","refurbished","renewed","deals","cheap","clearance","segunda mano
 COMPg=["8bitdo","gamesir","nyxi","mobapad","jsaux","genki","antank","binbok","ponkor","hori","oivo","gulikit","kdd","younik","natuk","jingmai","fastsnail","nexigo","powera","power a","pdp","pxn"]
 GIFTg=["gift","gifts","regalo","regalos"]
 PLATFORMg=set(["switch","nintendo switch","switch 2","nintendo switch 2","nintendo","switch oled","nintendo switch oled","switch lite","nintendo switch lite","switch 2 console","nintendo switch 2 console","consola switch","consola nintendo switch"])
-def matrix(kw):
+# cat-aware 噪音过滤(2026-06-27 移植自本地 import_seller_sprite,让L2自助词库与手动一样干净)
+NOISE_UNIV=["laptop","macbook","notebook","computer","pc dock","usb hub","usb-c hub","usb c hub","thunderbolt","monitor","ssd","hard drive","festplatte","flight stick","flight sim","steering wheel","volante","avion","lenkrad","drone","iphone","ipad","tablet","tv stick","fire tv","firestick","roku","phone holder","car mount","handyhalter"]
+CAT_ANCHOR={
+ "controller":["controller","manette","mando","gamepad","joystick","joy-con","joycon","joypad"],
+ "dock":["dock","docking","station","tv adapter","hdmi adapter","base de carga","ladestation"],
+ "case":["case","custodia","etui","funda","tasche","carrying","pouch","sleeve","schutzhulle","schutzhülle","aufbewahrung"],
+}
+def _hasanchor(k,anchors): return any(a in k for a in anchors)
+def matrix(kw,cat=None):
     k=kw.lower().strip()
+    if any(w in k for w in NOISE_UNIV): return "排除-别品类"
     if any(w in k for w in IPg): return "IP词"
     if any(w in k for w in PRICEg): return "排除-价格二手"
     if any(w in k for w in COMPg): return "品牌词-竞品"
     if any(w in k for w in GIFTg): return "礼品词"
     if k in PLATFORMg: return "品牌词-平台"
+    # 含别品类锚点且无本品类锚点 → 别品类噪音(防bundle词误杀:同时含本品类锚点则保留)
+    if cat in CAT_ANCHOR and not _hasanchor(k,CAT_ANCHOR[cat]):
+        for oc,anch in CAT_ANCHOR.items():
+            if oc!=cat and _hasanchor(k,anch): return "排除-别品类"
     return "意图词"
 def tier(v):
     if v is None: return None
@@ -238,11 +251,14 @@ def classify_report(bn,self_asin,lin):
     if bn.startswith("ReverseASIN-"): return "self" if self_asin in bn else "comp"
     if bn.startswith("KeywordMining-"): return "mining"
     if bn.startswith("ABAKeywordTrend-"): return "aba"
-    if bn.startswith("FUNLAB-") or bn.startswith("Fanlepu-"): return "sp_ss"
-    if bn.startswith("BusinessReport"): return "biz"
     if "Search_term_report" in bn: return "sp_amz"
+    if "SP搜索词" in bn or "用户搜索词" in bn: return "sp_ss"  # SP搜索词(各店前缀:DRIESNAUDE/FunlabDirect等,非只FUNLAB-/Fanlepu-)
+    if bn.startswith("FUNLAB-") or bn.startswith("Fanlepu-"): return "sp_ss"
+    if bn.startswith("BusinessReport") or "ABA品牌" in bn: return "biz"
+    if "选品" in bn or "ABA数据" in bn: return "biz"  # ABA数据选品 列数<reverse,误当self会越界崩,跳过(2026-06-27)
+    if "关键词反查" in bn: return "self"  # 陈翔宇 root self(关键词反查.xlsx 非ReverseASIN前缀)
     return "sp_amz" if lin else "self"  # 标准布局: 余下(根xlsx)=自家反查; 林明坚式: =亚马逊原生广告报表
-def import_keywords(files,site,asin):
+def import_keywords(files,site,asin,cat=None):
     merged={}
     def get(kw):
         key=kw.strip().lower()
@@ -251,7 +267,7 @@ def import_keywords(files,site,asin):
     self_ranks={}
     for p in files["self"]:
         for r in xrows(p)[1]:
-            if not r or r[0] is None: continue
+            if not r or r[0] is None or len(r)<=REV["top10"]: continue  # 越界守卫:防misclassified短文件IndexError
             d=get(str(r[REV["kw"]])); d["_src"].add("自家反查")
             v=numv(r[REV["vol"]]);
             if v is not None: d["月搜索量"]=max(d.get("月搜索量",0),v)
@@ -265,7 +281,7 @@ def import_keywords(files,site,asin):
             if r[REV["top10"]]: d["竞品前十ASIN"]=str(r[REV["top10"]])
     for p in files["comp"]:
         for r in xrows(p)[1]:
-            if not r or r[0] is None: continue
+            if not r or r[0] is None or len(r)<=REV["top10"]: continue  # 越界守卫
             d=get(str(r[REV["kw"]])); d["_src"].add("竞品反查")
             v=numv(r[REV["vol"]]);
             if v is not None: d["月搜索量"]=max(d.get("月搜索量",0),v)
@@ -318,7 +334,7 @@ def import_keywords(files,site,asin):
     TODAY=int(time.time()*1000)
     t1=[]
     for d in merged.values():
-        kw=d["关键词"]; d["矩阵"]=matrix(kw)
+        kw=d["关键词"]; d["矩阵"]=matrix(kw,cat)
         tv=tier(d.get("月搜索量"));
         if tv: d["词级"]=tv
         d["来源"]=";".join(SRC[s] for s in sorted(d["_src"])); d["数据更新日"]=TODAY; d.pop("_src",None)
@@ -631,7 +647,7 @@ def process(rid):
         # 3. 导词库(幂等)
         if not any(r["fields"].get("站点")==site for r in lall(app,T1)):
             ensure_t1_extra(app,T1)
-            t1d,t4d=import_keywords(files,site,asin)
+            t1d,t4d=import_keywords(files,site,asin,cat)
             batch(app,T1,t1d); batch(app,T4,t4d) if t4d else 0
             log.append(f"导词库 表1={len(t1d)} 表4={len(t4d)}")
         else: log.append("表1已有该站点,跳过导入")
