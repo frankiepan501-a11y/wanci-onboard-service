@@ -920,8 +920,8 @@ PRODUCT_META={
  "KS35灰":("FUNLAB","",False,""),
  "11-5戴夫":("FUNLAB",_DAVE,True,"FF05A-04"),
  "11戴夫":("FUNLAB",_DAVE,True,"FF05A-04"),
- "11波纹":("PALPOW",_ZELDA,False,""),
- "11白眼":("FUNLAB",_ZELDA,False,""),   # 2026-06-26 Frankie定: 11白眼=FUNLAB(非PALPOW); 品牌型号空→funlab_vi=None→只查标题含FUNLAB不推灯效(保守,有RGB再补品牌型号)
+ "11波纹":("FUNLAB",_ZELDA,False,""),   # 2026-06-27 Frankie定: 11波纹也=FUNLAB(欧洲挂PALPOW备案,真实FUNLAB)
+ "11白眼":("FUNLAB",_ZELDA,False,""),   # 2026-06-26 Frankie定: 11白眼=FUNLAB(欧洲挂PALPOW备案); 品牌型号空→funlab_vi=None→不推灯效(有RGB再补品牌型号); 标题PALPOW由BRAND_ALIASES放行不报缺
  "YC06":("","",False,""),               # 2026-06-26 Frankie定: 白牌产品(PP/FDN前缀混,无品牌术语)→R6保守不推
  "食人花dock":("POWKONG",_PIRANHA,False,""),
  "食人花2代":("POWKONG",_PIRANHA,False,""),
