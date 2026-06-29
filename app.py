@@ -616,6 +616,7 @@ def lookup_sku(sid,asin):
 
 DOMAIN={"US":1,"UK":2,"DE":3,"FR":4,"ES":8,"IT":9,"CA":6,"MX":10,"JP":7,"AU":12}
 # 站点→领星店铺country(中文) / 区域: 从ASIN+站点自动反查店铺,免运营手填sid/sku(阿坚反馈 2026-06-27 字段太多)
+_ss=lambda v: ((v[0] if isinstance(v,list) and v else v) or "")  # 站点 GET 返回 ['US'] list,用作dict key前提取字符串(2026-06-29 魔法阵崩因)
 SITE_CN={"US":"美国","UK":"英国","DE":"德国","FR":"法国","ES":"西班牙","IT":"意大利","CA":"加拿大","MX":"墨西哥","JP":"日本","AU":"澳洲","BR":"巴西"}
 SITE_REGION={"US":"北美","CA":"北美","MX":"北美","BR":"北美","UK":"欧洲","DE":"欧洲","FR":"欧洲","ES":"欧洲","IT":"欧洲"}
 MAIN_STORE=["fanlepu","funlabdirect","funlab","driesnaude","palpow","powkong"]  # 我方主力店名,优先扫(减少扫跟卖店的慢+抖动)
@@ -639,7 +640,7 @@ def resolve_store(asin,site,store_name=None):
             try: sku=lookup_sku(nsid,asin)
             except Exception: sku=None
             if sku: return nsid,sku,store_name
-    cn=SITE_CN.get(site,site)
+    cn=SITE_CN.get(_ss(site),_ss(site))
     stores=[s for s in sl if s.get("country")==cn]
     stores.sort(key=lambda s:0 if any(p in (s.get("name") or "").lower() for p in MAIN_STORE) else 1)
     for s in stores:
@@ -655,10 +656,10 @@ def process(rid):
     g=lambda k: ext(rec.get(k))
     product=g("产品"); site=rec.get("站点"); region=rec.get("区域"); asin=g("ASIN"); cat=rec.get("品类")
     op=g("负责运营"); sid=int(ext(rec.get("店铺sid")) or 0); sku=g("seller_sku(可空自动查)")
-    reuse=g("复用App_token(可空,空=自动新建)"); domain=int(ext(rec.get("Sorftime_domain")) or DOMAIN.get(site,0))
+    reuse=g("复用App_token(可空,空=自动新建)"); domain=int(ext(rec.get("Sorftime_domain")) or DOMAIN.get(_ss(site),0))
     layout=rec.get("报表布局") or ""; lin="林明坚式" in layout
     store=g("店铺名") or ""
-    if not region: region=SITE_REGION.get(site,"欧洲")  # 区域从站点自动推
+    if not region: region=SITE_REGION.get(_ss(site),"欧洲")  # 区域从站点自动推
     upd(REG_APP,APPLY_TB,rid,{"状态":"处理中"})
     log=[]
     try:
