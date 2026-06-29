@@ -1313,3 +1313,5 @@ async def onboard(req:Request):
     if not rid: return {"ok":False,"err":"record_id required"}
     threading.Thread(target=process,args=(rid,),daemon=True).start()  # 后台跑绕开网关超时
     return {"ok":True,"msg":"processing","record_id":rid}
+
+# redeploy trigger 3443081
