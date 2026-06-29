@@ -598,40 +598,53 @@ def fill_234(app,t1,t2,t3,t5,t6,L,cat,site):
     return n2,n3,n5,n6
 
 def lookup_sku(sid,asin):
-    # asin 过滤一次命中(is_pair=1 让 asin 参数生效,免翻2500页;实测 2026-06-27)。失败回退分页扫。
-    try:
-        r=lx("/erp/sc/data/mws/listing",{"sid":sid,"asin":asin,"is_pair":1,"length":50,"offset":0})
-        for it in (r.get("data") or []):
-            if it.get("asin")==asin and it.get("seller_sku"): return it["seller_sku"]
-        if r.get("code")==0: return None  # 过滤生效但该店无此asin
-    except Exception: pass
-    off=0  # 回退: 分页扫(过滤异常时)
-    while off<2500:
-        r=lx("/erp/sc/data/mws/listing",{"sid":sid,"length":50,"offset":off})
+    # 领星 mws/listing 无可用asin过滤(is_pair/search_field实测无效),只能全表扫。length200提速(472店~3页)。
+    # 优先返回非amzn自动sku(真实msku),无则返回任一。
+    off=0; fallback=None
+    while off<3000:
+        r=lx("/erp/sc/data/mws/listing",{"sid":sid,"length":200,"offset":off})
         data=r.get("data") or []
         if not data: break
         for it in data:
-            if it.get("asin")==asin and it.get("seller_sku"): return it["seller_sku"]
-        if len(data)<50: break
-        off+=len(data); time.sleep(0.2)
-    return None
+            if it.get("asin")==asin and it.get("seller_sku"):
+                sk=it["seller_sku"]
+                if not str(sk).lower().startswith("amzn."): return sk  # 真实msku优先
+                fallback=fallback or sk
+        if len(data)<200: break
+        off+=len(data)
+    return fallback
 
 DOMAIN={"US":1,"UK":2,"DE":3,"FR":4,"ES":8,"IT":9,"CA":6,"MX":10,"JP":7,"AU":12}
 # 站点→领星店铺country(中文) / 区域: 从ASIN+站点自动反查店铺,免运营手填sid/sku(阿坚反馈 2026-06-27 字段太多)
 SITE_CN={"US":"美国","UK":"英国","DE":"德国","FR":"法国","ES":"西班牙","IT":"意大利","CA":"加拿大","MX":"墨西哥","JP":"日本","AU":"澳洲","BR":"巴西"}
 SITE_REGION={"US":"北美","CA":"北美","MX":"北美","BR":"北美","UK":"欧洲","DE":"欧洲","FR":"欧洲","ES":"欧洲","IT":"欧洲"}
-MAIN_STORE=["fanlepu","funlabdirect","funlab","driesnaude","palpow","powkong"]  # 我方主力店名,优先扫(减少扫跟卖店2500条的慢+抖动)
-def resolve_store(asin,site):
-    """从 ASIN+站点 自动反查 (sid,seller_sku,store_name): 遍历该站领星店铺找拥有该ASIN(有seller_sku)的owner店。
-    优先我方主力店(Fanlepu/FunlabDirect等)→更快更稳;单店API出错跳过不阻断。"""
-    cn=SITE_CN.get(site,site)
+MAIN_STORE=["fanlepu","funlabdirect","funlab","driesnaude","palpow","powkong"]  # 我方主力店名,优先扫(减少扫跟卖店的慢+抖动)
+def name2sid(store_name,sl):
+    nm=(store_name or "").strip().lower()
+    if not nm: return None
+    for s in sl:  # 精确
+        if (s.get("name") or "").strip().lower()==nm: return s["sid"]
+    for s in sl:  # 模糊(去掉国家后缀如 -US)
+        snm=(s.get("name") or "").strip().lower()
+        if nm in snm or snm.split("-")[0]==nm.split("-")[0]: return s["sid"]
+    return None
+def resolve_store(asin,site,store_name=None):
+    """从 ASIN(+店铺名/站点) 反查 (sid,seller_sku,store_name)。
+    运营给店铺名→先只扫那一个店(最快最准,Frankie 2026-06-27);否则扫该站店铺(主力店优先);单店出错跳过。"""
     try: sl=lx("/erp/sc/data/seller/lists",{}).get("data") or []
     except Exception: return None,None,None
+    if store_name:  # 运营指定店铺名→直接定位该店
+        nsid=name2sid(store_name,sl)
+        if nsid:
+            try: sku=lookup_sku(nsid,asin)
+            except Exception: sku=None
+            if sku: return nsid,sku,store_name
+    cn=SITE_CN.get(site,site)
     stores=[s for s in sl if s.get("country")==cn]
     stores.sort(key=lambda s:0 if any(p in (s.get("name") or "").lower() for p in MAIN_STORE) else 1)
     for s in stores:
         try: sku=lookup_sku(s["sid"],asin)
-        except Exception: continue  # 单店API抖动不阻断,试下一个
+        except Exception: continue
         if sku: return s["sid"],sku,(s.get("name") or f"sid{s['sid']}")
     return None,None,None
 # ───────────────── 主编排 ─────────────────
@@ -649,7 +662,7 @@ def process(rid):
     try:
         # 自动反查店铺(运营只需填ASIN+站点,免手填sid/sku): 报表里本就有ASIN→领星反查owner店
         if not sid:
-            rsid,rsku,rstore=resolve_store(asin,site)
+            rsid,rsku,rstore=resolve_store(asin,site,store)  # store=运营填的店铺名,有则优先只扫该店
             if rsid:
                 sid=rsid; sku=sku or rsku; store=store or rstore
                 try: upd(REG_APP,APPLY_TB,rid,{"店铺sid":sid})  # 写回申请表让运营看到反查到的sid
