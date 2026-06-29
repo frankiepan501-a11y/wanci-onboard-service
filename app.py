@@ -246,6 +246,15 @@ def xrows(p):
     it=ws.iter_rows(values_only=True); hdr=list(next(it)); rs=[r for r in it]
     wb.close(); return hdr,rs
 
+def safe_xrows(p,skipped):
+    # 容错: 单个报表文件读不了(老.xls BIFF格式/损坏/空文件)→skip+记log+stdout告警,不崩整onboard(KS35 UK暴露,2026-06-29)
+    try:
+        return xrows(p)
+    except Exception as e:
+        bn=os.path.basename(p); skipped.append(bn)
+        print(f"[WARN] 跳过读不了的报表文件 {bn}: {type(e).__name__}: {e}",flush=True)
+        return [],[]
+
 # ───────────────── 报表导入 (港 import_seller_sprite) ─────────────────
 def classify_report(bn,self_asin,lin):
     if bn.startswith("ReverseASIN-"): return "self" if self_asin in bn else "comp"
@@ -260,13 +269,14 @@ def classify_report(bn,self_asin,lin):
     return "sp_amz" if lin else "self"  # 标准布局: 余下(根xlsx)=自家反查; 林明坚式: =亚马逊原生广告报表
 def import_keywords(files,site,asin,cat=None):
     merged={}
+    skipped=[]
     def get(kw):
         key=kw.strip().lower()
         if key not in merged: merged[key]={"关键词":kw.strip(),"站点":site,"_src":set()}
         return merged[key]
     self_ranks={}
     for p in files["self"]:
-        for r in xrows(p)[1]:
+        for r in safe_xrows(p,skipped)[1]:
             if not r or r[0] is None or len(r)<=REV["top10"]: continue  # 越界守卫:防misclassified短文件IndexError
             d=get(str(r[REV["kw"]])); d["_src"].add("自家反查")
             v=numv(r[REV["vol"]]);
@@ -280,7 +290,7 @@ def import_keywords(files,site,asin,cat=None):
             if cur(r[REV["ppc"]]) is not None: d["CPC$"]=cur(r[REV["ppc"]])
             if r[REV["top10"]]: d["竞品前十ASIN"]=str(r[REV["top10"]])
     for p in files["comp"]:
-        for r in xrows(p)[1]:
+        for r in safe_xrows(p,skipped)[1]:
             if not r or r[0] is None or len(r)<=REV["top10"]: continue  # 越界守卫
             d=get(str(r[REV["kw"]])); d["_src"].add("竞品反查")
             v=numv(r[REV["vol"]]);
@@ -292,7 +302,7 @@ def import_keywords(files,site,asin,cat=None):
             if "CVR%" not in d and numv(r[REV["buy"]]) is not None: d["CVR%"]=round(numv(r[REV["buy"]])*100,2)
             if "竞品前十ASIN" not in d and r[REV["top10"]]: d["竞品前十ASIN"]=str(r[REV["top10"]])
     for p in files["mining"]:
-        for r in xrows(p)[1]:
+        for r in safe_xrows(p,skipped)[1]:
             if not r or r[0] is None: continue
             d=get(str(r[MIN["kw"]])); d["_src"].add("挖掘")
             v=numv(r[MIN["vol"]]);
@@ -302,7 +312,7 @@ def import_keywords(files,site,asin,cat=None):
             if "CVR%" not in d and numv(r[MIN["buy"]]) is not None: d["CVR%"]=round(numv(r[MIN["buy"]])*100,2)
             if "竞品前十ASIN" not in d and r[MIN["top10"]]: d["竞品前十ASIN"]=str(r[MIN["top10"]])
     for p in files["aba"]:
-        for r in xrows(p)[1]:
+        for r in safe_xrows(p,skipped)[1]:
             if not r or r[0] is None or str(r[ABA["kw"]]).strip() in ("","None"): continue
             d=get(str(r[ABA["kw"]])); d["_src"].add("ABA")
             v=numv(r[ABA["vol"]]);
@@ -312,7 +322,7 @@ def import_keywords(files,site,asin,cat=None):
             if "竞品前十ASIN" not in d and r[ABA["top10"]]: d["竞品前十ASIN"]=str(r[ABA["top10"]])
     sp_orders={}
     for p in files["sp_amz"]+files["sp_ss"]:
-        hdr,rs=xrows(p)
+        hdr,rs=safe_xrows(p,skipped)
         def fc(cands):
             for i,h in enumerate(hdr):
                 if str(h).strip().lower() in cands: return i
@@ -341,7 +351,7 @@ def import_keywords(files,site,asin,cat=None):
         if d.get("月搜索量")==0: d.pop("月搜索量",None)
         t1.append(d)
     t4=[{"关键词":kw,"站点":site,"自然排名":nat,"是否收录":True,"快照日期":TODAY,"距首页差距":str(max(0,int(nat-16)))} for kw,nat in self_ranks.items()]
-    return t1,t4
+    return t1,t4,skipped
 
 def ensure_t1_extra(app,t1):
     have={f["field_name"] for f in api("GET",f"/bitable/v1/apps/{app}/tables/{t1}/fields?page_size=200")["data"]["items"]}
@@ -704,9 +714,9 @@ def process(rid):
         ensure_t1_extra(app,T1)
         had=any(f["fields"].get("站点")==site for f in lall(app,T1))
         clear(app,T1,lambda f,s=site:f.get("站点")==s); clear(app,T4,lambda f,s=site:f.get("站点")==s)
-        t1d,t4d=import_keywords(files,site,asin,cat)
+        t1d,t4d,skipped=import_keywords(files,site,asin,cat)
         batch(app,T1,t1d); batch(app,T4,t4d) if t4d else 0
-        log.append(f"导词库 表1={len(t1d)} 表4={len(t4d)}"+("(清旧重导刷新)" if had else ""))
+        log.append(f"导词库 表1={len(t1d)} 表4={len(t4d)}"+("(清旧重导刷新)" if had else "")+(f" ⚠️跳过{len(skipped)}坏文件:{','.join(skipped)}" if skipped else ""))
         # 4. 登记总台(幂等)
         exist={(ext(x["fields"].get("ASIN")),x["fields"].get("站点")) for x in lall(REG_APP,REG_TB)}
         if (asin,site) not in exist:
