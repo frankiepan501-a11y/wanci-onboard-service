@@ -654,12 +654,12 @@ def process(rid):
     if ext(rec.get("状态"))=="处理中":  # 幂等守卫: 已有线程在处理→跳过,防并发双跑(clear+reimport并发会乱;2026-06-29 魔法阵双触发)
         return {"ok":False,"err":"already processing","skip":True}
     g=lambda k: ext(rec.get(k))
-    product=g("产品"); site=rec.get("站点"); region=rec.get("区域"); asin=g("ASIN"); cat=rec.get("品类")
+    product=g("产品"); site=_ss(rec.get("站点")); region=_ss(rec.get("区域")); asin=g("ASIN"); cat=_ss(rec.get("品类"))  # 单选GET可能返list['US'],统一提字符串(写表1单选+dict key都要string)
     op=g("负责运营"); sid=int(ext(rec.get("店铺sid")) or 0); sku=g("seller_sku(可空自动查)")
-    reuse=g("复用App_token(可空,空=自动新建)"); domain=int(ext(rec.get("Sorftime_domain")) or DOMAIN.get(_ss(site),0))
-    layout=rec.get("报表布局") or ""; lin="林明坚式" in layout
+    reuse=g("复用App_token(可空,空=自动新建)"); domain=int(ext(rec.get("Sorftime_domain")) or DOMAIN.get(site,0))
+    layout=_ss(rec.get("报表布局")); lin="林明坚式" in layout
     store=g("店铺名") or ""
-    if not region: region=SITE_REGION.get(_ss(site),"欧洲")  # 区域从站点自动推
+    if not region: region=SITE_REGION.get(site,"欧洲")  # 区域从站点自动推
     upd(REG_APP,APPLY_TB,rid,{"状态":"处理中"})
     log=[]
     try:
