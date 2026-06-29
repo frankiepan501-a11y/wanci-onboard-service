@@ -361,6 +361,37 @@ def ensure_t1_extra(app,t1):
             if prop: b["property"]=prop
             api("POST",f"/bitable/v1/apps/{app}/tables/{t1}/fields",b)
 
+# ───────────────── 职务级授权: 万词文档自动给「亚马逊运营专员」全员(Frankie 2026-06-29 立) ─────────────────
+# 实时查飞书人事花名册(单一真相源,不硬编人名)→在职「亚马逊运营专员」open_id→逐人授(职务/部门不能直接当协作者)
+def amazon_ops_oids():
+    try:
+        depts=api("GET","/contact/v3/departments?page_size=50&fetch_child=true&parent_department_id=0&department_id_type=open_department_id")["data"]["items"]
+    except Exception as e:
+        print(f"[WARN] 查部门失败(职务授权跳过): {e}",flush=True); return []
+    oids=[]
+    for d in depts:
+        pt=""
+        while True:
+            url=f"/contact/v3/users?department_id={d['open_department_id']}&page_size=50&user_id_type=open_id&department_id_type=open_department_id"+(f"&page_token={pt}" if pt else "")
+            dd=api("GET",url)
+            if not isinstance(dd,dict) or dd.get("code")!=0: break
+            for u in dd["data"].get("items",[]):
+                st=u.get("status",{})
+                if u.get("job_title")=="亚马逊运营专员" and st.get("is_activated") and not st.get("is_resigned") and not st.get("is_frozen"):
+                    oids.append(u["open_id"])
+            if not dd["data"].get("has_more"): break
+            pt=dd["data"].get("page_token","")
+    return list(dict.fromkeys(oids))
+
+def grant_amazon_ops(app):
+    n=0
+    for oid in amazon_ops_oids():
+        r=api("POST",f"/drive/v1/permissions/{app}/members?type=bitable&need_notification=false",{"member_type":"openid","member_id":oid,"perm":"edit"})
+        if isinstance(r,dict) and r.get("_http"):
+            print(f"[WARN] 授权 {oid} 失败: {r.get('_http')} {r.get('_body','')[:120]}",flush=True)
+        else: n+=1
+    return n
+
 # ───────────────── clone 作战台 (港 clone_warzone) ─────────────────
 def clone_app(name):
     src=[t for t in api("GET",f"/bitable/v1/apps/{TEMPLATE_APP}/tables?page_size=100")["data"]["items"] if t["name"].startswith("表")]
@@ -386,6 +417,7 @@ def clone_app(name):
         if t["name"]=="数据表": api("DELETE",f"/bitable/v1/apps/{app}/tables/{t['table_id']}")
     FRANKIE="ou_629ce01f4bc31de078e10fcb038dbf78"
     api("POST",f"/drive/v1/permissions/{app}/members?type=bitable&need_notification=false",{"member_type":"openid","member_id":FRANKIE,"perm":"full_access"})
+    g=grant_amazon_ops(app); print(f"[INFO] 作战台授权亚马逊运营专员 {g} 人",flush=True)  # transfer前授(聪哥1号还是owner,保证成功)
     api("POST",f"/wiki/v2/spaces/7610698300903214305/nodes/move_docs_to_wiki",{"parent_wiki_token":"VgfDwDtAGibw6akdDuCcMTs2nLd","obj_type":"bitable","obj_token":app})
     api("POST",f"/drive/v1/permissions/{app}/members/transfer_owner?type=bitable",{"member_type":"openid","member_id":FRANKIE})
     return app,tmap
@@ -707,6 +739,7 @@ def process(rid):
             app=reuse; t=api("GET",f"/bitable/v1/apps/{app}/tables?page_size=100")["data"]["items"]
             tm={x["name"]:x["table_id"] for x in t}
             T1=tm["表1·关键词词库"];T2=tm["表2·Listing埋词审计"];T3=tm["表3·广告计划建议"];T4=tm["表4·排名收录追踪"];T5=tm["表5·阶段目标与审计"];T6=tm["表6·否定词库"]
+            gr=grant_amazon_ops(app); log.append(f"授权亚马逊运营专员 {gr} 人(复用作战台,best-effort)")  # 已transfer给Frankie,聪哥1号若保留管理权则成功,否则best-effort跳过
         else:
             app,tm=clone_app(f"亚马逊万词作战台·{product}-{region}")
             T1=tm["表1·关键词词库"];T2=tm["表2·Listing埋词审计"];T3=tm["表3·广告计划建议"];T4=tm["表4·排名收录追踪"];T5=tm["表5·阶段目标与审计"];T6=tm["表6·否定词库"]
