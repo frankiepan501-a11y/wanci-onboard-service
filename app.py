@@ -650,6 +650,8 @@ def resolve_store(asin,site,store_name=None):
 # ───────────────── 主编排 ─────────────────
 def process(rid):
     rec=api("GET",f"/bitable/v1/apps/{REG_APP}/tables/{APPLY_TB}/records/{rid}")["data"]["record"]["fields"]
+    if ext(rec.get("状态"))=="处理中":  # 幂等守卫: 已有线程在处理→跳过,防并发双跑(clear+reimport并发会乱;2026-06-29 魔法阵双触发)
+        return {"ok":False,"err":"already processing","skip":True}
     g=lambda k: ext(rec.get(k))
     product=g("产品"); site=rec.get("站点"); region=rec.get("区域"); asin=g("ASIN"); cat=rec.get("品类")
     op=g("负责运营"); sid=int(ext(rec.get("店铺sid")) or 0); sku=g("seller_sku(可空自动查)")
