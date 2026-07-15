@@ -44,6 +44,14 @@ def api(m,p,b=None):
 def ext(v):
     if isinstance(v,list) and v and isinstance(v[0],dict): return v[0].get("text","")
     return v if isinstance(v,(str,int,float)) else ""
+def ss(v):
+    """Normalize Feishu single-select values, which may arrive as text or a one-item list."""
+    if isinstance(v,list):
+        if not v: return ""
+        x=v[0]
+        if isinstance(x,dict): return str(x.get("text") or x.get("name") or x.get("value") or "")
+        return str(x)
+    return str(v) if isinstance(v,(str,int,float)) else ""
 def lall(app,tb):
     out=[];pt=""
     while True:
@@ -890,6 +898,7 @@ def store_listing_meta(sid):
     return out
 def do_review(frankie_only=False,dry=False):
     day=time.strftime("%Y-%m-%d")
+    print(f"[review] start frankie_only={frankie_only} dry={dry}",flush=True)
     _adc={}; _metac={}; _perfc={}
     def admap(sid):
         if sid not in _adc: _adc[sid]=store_ad_map(sid)
@@ -900,27 +909,29 @@ def do_review(frankie_only=False,dry=False):
     def perfm(sid):
         if sid not in _perfc: _perfc[sid]=store_ad_perf(sid)
         return _perfc[sid]
-    reg=[r for r in lall(REG_APP,REG_TB) if r["fields"].get("状态") in ("在跑","筹备")]
+    reg=[r for r in lall(REG_APP,REG_TB) if ss(r["fields"].get("状态")) in ("在跑","筹备")]
     snaps=lall(REG_APP,SNAP_TB)
+    print(f"[review] loaded reg={len(reg)} snaps={len(snaps)}",flush=True)
     prev={}; first={}
     for s in snaps:
-        f=s["fields"]; k=(ext(f.get("ASIN")),f.get("站点")); ts=f.get("快照时间") or 0
+        f=s["fields"]; k=(ext(f.get("ASIN")),ss(f.get("站点"))); ts=f.get("快照时间") or 0
         if k not in prev or ts>prev[k][0]: prev[k]=(ts,f)
         if k not in first or ts<first[k][0]: first[k]=(ts,f)
     now=int(time.time()*1000); per_op={}; new_snap=[]; errors=[]
     for r in reg:
         f=r["fields"]
-        product=ext(f.get("产品")); site=f.get("站点"); asin=ext(f.get("ASIN")); region=f.get("区域")
+        product=ext(f.get("产品")); site=ss(f.get("站点")); asin=ext(f.get("ASIN")); region=ss(f.get("区域"))
         op=ext(f.get("负责运营")); cat=ext(f.get("品类")) or "controller"
         sid=int(ext(f.get("店铺sid")) or 0); sku=ext(f.get("seller_sku"))
         app2=ext(f.get("作战台App_token")); t1=ext(f.get("词库表id"))
-        haverank=bool(ext(f.get("rank子表id"))) and f.get("状态")=="在跑"
+        status=ss(f.get("状态"))
+        haverank=bool(ext(f.get("rank子表id"))) and status=="在跑"
         try:
             if not sku and sid: sku=lookup_sku(sid,asin)
             if not sku: errors.append(f"{product}-{site}:无sku"); continue
             lr=lx("/listing/publish/openapi/amazon/product/search",{"store_id":sid,"skus":[sku]})
             L=load_listing(lr)
-            rows=[x["fields"] for x in lall(app2,t1) if x["fields"].get("站点")==site]
+            rows=[x["fields"] for x in lall(app2,t1) if ss(x["fields"].get("站点"))==site]
             m=compute_audit(L,rows,cat)
             meta=metam(sid).get(asin,{}); perf=perfm(sid).get(asin,{})
             bsr=meta.get("bsr"); fba=meta.get("fba"); thirty=meta.get("thirty")
@@ -974,7 +985,11 @@ def do_review(frankie_only=False,dry=False):
                 "7天花费":cost,"ACoS%":acos,"CTR%":ctr,"CVR%":cvr})
         except Exception as e:
             errors.append(f"{product}-{site}:{str(e)[:80]}")
-    if new_snap and not dry: batch(REG_APP,SNAP_TB,new_snap)
+    print(f"[review] computed new_snap={len(new_snap)} operators={len(per_op)} errors={len(errors)}",flush=True)
+    if errors: print("[review] errors "+" | ".join(errors[:8]),flush=True)
+    if new_snap and not dry:
+        written=batch(REG_APP,SNAP_TB,new_snap)
+        print(f"[review] wrote snapshots={written}",flush=True)
     # 每运营卡
     if not frankie_only and not dry:
         for op,items in per_op.items():
@@ -1332,7 +1347,7 @@ def report(asin:str, site:str):
         row=None
         for r in lall(REG_APP,REG_TB):
             f=r["fields"]
-            if ext(f.get("ASIN"))==asin and f.get("站点")==site: row=f; break
+            if ext(f.get("ASIN"))==asin and ss(f.get("站点"))==site: row=f; break
         if not row: return HTMLResponse(f"<h1>未找到 {esc(asin)} / {esc(site)} 的作战台登记</h1>",status_code=404)
         product=ext(row.get("产品")); cat=ext(row.get("品类")) or "controller"; op=ext(row.get("负责运营"))
         sid=int(ext(row.get("店铺sid")) or 0); sku=ext(row.get("seller_sku"))
@@ -1344,7 +1359,7 @@ def report(asin:str, site:str):
         meta["品牌型号"]=bxh
         d=lx("/listing/publish/openapi/amazon/product/search",{"store_id":sid,"skus":[sku]})
         L=load_listing(d)
-        rows=[x["fields"] for x in lall(app2,t1) if ext(x["fields"].get("站点")) in ("",site)]
+        rows=[x["fields"] for x in lall(app2,t1) if ss(x["fields"].get("站点")) in ("",site)]
         a=audit14(meta,L,rows)
         return HTMLResponse(render14(meta,L,a))
     except Exception as e:
