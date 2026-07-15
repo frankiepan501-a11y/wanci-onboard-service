@@ -16,7 +16,7 @@ APPLY_TB=os.environ.get("WANCI_APPLY_TB","tblPXS4uO8lK9p5g")
 RANK_BASE=os.environ.get("WANCI_RANK_BASE","EEKNbZ8b8aqv6msOaTscotBDn5f")
 SNAP_TB=os.environ.get("WANCI_SNAP_TB","tbl3OipVxS8wyjKk")  # 万词周快照表(总台App内)
 TARGET_ACOS=float(os.environ.get("WANCI_TARGET_ACOS","35"))  # 目标ACoS%(默认35,低于食人花dock~40盈亏平衡;判提预算/优化的阈值)
-GUIDANCE_DAYS=int(os.environ.get("WANCI_GUIDANCE_DAYS","7"))  # 指导时间(天,Frankie定7):14维建议发出N天后审执行,逾期未改listing/未开广告→催办
+GUIDANCE_DAYS=int(os.environ.get("WANCI_GUIDANCE_DAYS","7"))  # 14维建议发出N天后复查待办是否处理
 def ad_verdict(acos,sal):
     """广告表现判定(供"是否值得提预算"):盈利(ACoS≤target)=健康;否则需优化。"""
     if sal<=0: return "无成交"
@@ -467,12 +467,12 @@ def make_html(product,site,asin,store,L,rows,cat):
     if not L.get("has_record",True):
         hb=f"""<div class="callout c-yel"><h2 style="margin-top:0">🟡 跟卖 / 本店无自建 listing</h2><ul><li>该 seller_sku 在本店<strong>无 listing 记录</strong>（纯跟卖他人 ASIN 的 offer，或 sku 填错）。</li><li>无法编辑被跟卖 listing 的文案 → <strong>埋词需先自建独立 listing</strong>。下方「已收录」来自反查仍有效。</li></ul></div>"""
     elif not L.get("authored",True):
-        hb=f"""<div class="callout c-yel"><h2 style="margin-top:0">🟡 跟卖 / 未自建文案</h2><ul><li>本店只挂 offer 匹配到已有 ASIN，标题《{esc(L['title'][:60])}》来自<strong>被跟卖 listing</strong>，我方<strong>未自建五点/描述/后台ST</strong>（attributes 无 item_name/bullet_point）。</li><li>→ 无法埋词；要埋词须<strong>自建独立 listing</strong>（或在拥有该 listing 文案的店铺操作）。非领星同步问题。</li></ul></div>"""
+        hb=f"""<div class="callout c-yel"><h2 style="margin-top:0">🟡 跟卖 / 未自建文案</h2><ul><li>本店只挂 offer 匹配到已有 ASIN，标题《{esc(L['title'][:60])}》来自<strong>被跟卖 listing</strong>，我方<strong>未自建五点/描述/后台搜索词</strong>（attributes 无 item_name/bullet_point）。</li><li>→ 无法埋词；要埋词须<strong>自建独立 listing</strong>（或在拥有该 listing 文案的店铺操作）。非领星同步问题。</li></ul></div>"""
     elif notext:
-        hb=f"""<div class="callout c-red"><h2 style="margin-top:0">🔴 listing 文案全空（标题/五点/描述/ST）</h2><ul><li>状态 <strong>{esc('/'.join(L['status']) or '未知')}</strong>。请运营核实后台 listing 是否建全。下方「已收录」仍有效。</li></ul></div>"""
+        hb=f"""<div class="callout c-red"><h2 style="margin-top:0">🔴 Listing 文案全空（标题/五点/描述/后台搜索词）</h2><ul><li>状态 <strong>{esc('/'.join(L['status']) or '未知')}</strong>。请运营核实后台 listing 是否建全。下方「已收录」仍有效。</li></ul></div>"""
     elif be or de or se or not buy:
-        mp=[x for x,c in [("五点空",be),("描述空",de),("后台ST空",se),("非BUYABLE",not buy)] if c]
-        hb=f"""<div class="callout c-red"><h2 style="margin-top:0">🔴 头号问题：listing 是「半成品」</h2><ul><li><strong>{esc(' / '.join(mp))}</strong></li><li>能埋词的层严重缺失 → 多数词无处收录,先补全文案/上架可售。</li></ul></div>"""
+        mp=[x for x,c in [("五点没填",be),("描述没填",de),("后台搜索词没填",se),("店铺不可售",not buy)] if c]
+        hb=f"""<div class="callout c-red"><h2 style="margin-top:0">🔴 头号问题：Listing 需先处理</h2><ul><li><strong>{esc(' / '.join(mp))}</strong></li><li>先把这些问题处理好，再看埋词和广告。</li></ul></div>"""
     else: hb=""
     return f"""<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>{esc(product)} · {esc(site)} 埋词审计</title>
 <style>:root{{--bg:#0f1115;--card:#171a21;--line:#262b36;--txt:#e6e9ef;--mut:#9aa3b2;--red:#ff5c66;--redbg:#2a161a;--grn:#28d6a3;--yel:#ffc24b;--yelbg:#2a2310;--blu:#5ab0ff;--accent:#19E0CE}}*{{box-sizing:border-box}}body{{margin:0;background:var(--bg);color:var(--txt);font-family:-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;line-height:1.65}}.wrap{{max-width:900px;margin:0 auto;padding:40px 24px 80px}}header{{border-bottom:1px solid var(--line);padding-bottom:22px;margin-bottom:26px}}.kicker{{color:var(--accent);font-size:13px;letter-spacing:2px;font-weight:600}}h1{{font-size:27px;margin:8px 0 6px}}.meta{{color:var(--mut);font-size:13px;font-family:Consolas,monospace}}h2{{font-size:19px;margin:30px 0 12px}}.card{{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px 22px;margin:12px 0}}.callout{{border-left:4px solid var(--red);background:var(--redbg);border-radius:10px;padding:16px 20px;margin:14px 0}}.callout h2{{color:var(--red)}}.c-yel{{background:var(--yelbg);border-color:var(--yel)}}.stat-row{{display:flex;gap:12px;flex-wrap:wrap;margin:12px 0}}.stat{{flex:1;min-width:150px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:15px}}.stat .n{{font-size:30px;font-weight:700;color:var(--accent)}}.stat .l{{color:var(--mut);font-size:12.5px;margin-top:2px}}.tier{{display:flex;gap:10px;margin-top:10px}}.tierbox{{flex:1;text-align:center;background:#1b1f27;border-radius:9px;padding:9px 4px}}.tierbox .tn{{font-size:20px;font-weight:700}}.tierbox .tl{{font-size:11px;color:var(--mut)}}.t-good .tn{{color:var(--grn)}}.t-mid .tn{{color:var(--yel)}}.t-bad .tn{{color:var(--red)}}table{{width:100%;border-collapse:collapse;margin-top:10px;font-size:14px}}th{{text-align:left;color:var(--mut);border-bottom:1px solid var(--line);padding:8px 10px;font-size:12px}}td{{padding:8px 10px;border-bottom:1px solid #1d2129}}.kw{{font-family:Consolas,monospace;color:#dfe6ee}}.num{{text-align:right;color:var(--accent);font-weight:600}}.dash{{color:#4a5160}}.tag{{display:inline-block;font-size:11px;padding:2px 8px;border-radius:20px;background:#22303a;color:var(--blu)}}.tag.p{{background:#2c2433;color:#c79bff}}.tag.n{{background:#2a2014;color:#caa46a}}.foot{{color:var(--mut);font-size:12.5px;border-top:1px dashed var(--line);margin-top:28px;padding-top:14px}}ol li,ul li{{margin:8px 0}}</style></head><body><div class="wrap">
@@ -480,7 +480,7 @@ def make_html(product,site,asin,store,L,rows,cat):
 {hb}
 <h2>📊 三个关键数（别混）</h2><div class="stat-row"><div class="stat"><div class="n">{total}</div><div class="l">候选池(词库总词)<br>含待校验噪音</div></div><div class="stat"><div class="n">{len(rk)}</div><div class="l">✅ 已收录(有自然排名)<br>占候选 {rkp}%</div></div><div class="stat"><div class="n">{embedded}</div><div class="l">已埋(埋进文案)<br>占候选 {ep}%</div></div><div class="stat"><div class="n">{fit}</div><div class="l">合适词(剔噪后)<br>直写{len(embeddable)}+UGC{len(ugc)}</div></div></div>
 <h2>🎯 已收录 {len(rk)} 词 · 收录质量分层</h2><div class="card"><div class="tier"><div class="tierbox t-good"><div class="tn">{len(p1)}</div><div class="tl">首页(≤16名)</div></div><div class="tierbox t-mid"><div class="tn">{len(p23)}</div><div class="tl">2-3页(17-48)</div></div><div class="tierbox t-bad"><div class="tn">{len(deep)}</div><div class="tl">靠后(&gt;48)</div></div></div><div style="color:var(--mut);font-size:13px;margin-top:10px">收录≠首页：{len(rk)} 个有排名里只 {len(p1)} 个首页，{len(deep)} 个在第3页后。万词要把它们往首页推 + 把合适漏埋词推进收录。</div></div>
-<h2>✅ 改进意见</h2><div class="card"><ol><li><strong>{'先补全文案+上架可售' if (be or de or se or not buy) else '补齐缺失埋词层'}</strong>：空层补全(可本地化美国站文案),确认库存价格变 BUYABLE。</li><li><strong>后台ST立即填</strong>：最易补,先塞高价值漏埋词。</li><li><strong>敏感词走UGC</strong>：nintendo 描述里 compatible with 埋1处;IP/竞品靠 Review/QA。</li><li><strong>机型兼容词可直写</strong>(本品支持的机型)。</li></ol></div>
+<h2>✅ 改进意见</h2><div class="card"><ol><li><strong>{'先补全文案+上架可售' if (be or de or se or not buy) else '补齐缺失埋词层'}</strong>：空层补全(可本地化美国站文案),确认店铺已可售。</li><li><strong>后台搜索词先填</strong>：最容易补,先放高价值漏埋词。</li><li><strong>敏感词走UGC</strong>：nintendo 描述里 compatible with 埋1处;IP/竞品靠 Review/QA。</li><li><strong>机型兼容词可直写</strong>(本品支持的机型)。</li></ol></div>
 <h2>📌 高价值漏埋词根 Top20 · 可直写补埋</h2><div style="color:var(--mut);font-size:13px">已按<b>差异化词根聚合</b>(switch/switch 2/nintendo 等机型变体合并,只提示真正缺的卖点词根,不堆词);商标/竞品/IP/游戏/别平台/拼写变体已排除。月搜量为同根累加。</div>
 <table><thead><tr><th>关键词</th><th>矩阵</th><th class="num">月搜量</th><th class="num">已出单</th></tr></thead><tbody>{miss_h}</tbody></table>
 <div class="callout c-yel"><strong style="color:var(--yel)">⚠️ 走 UGC 不直写的敏感词</strong>(漏埋但靠 Review/QA 收录,别塞ST/五点)<ul style="margin-bottom:0">{ugc_h}</ul></div>
@@ -603,12 +603,12 @@ def fill_234(app,t1,t2,t3,t5,t6,L,cat,site):
         kw=ext(f.get("关键词")); mx=f.get("矩阵")
         if mx not in ("意图词","品牌词-平台","品牌词-竞品","IP词"): continue
         inT=cov(kw,tt);inB=cov(kw,bt);inD=cov(kw,dt);inS=cov(kw,st);fr=cov(kw,front)
-        ch=("直写前台(标题/五点/描述/后台ST)" if mx=="意图词" else ("后台ST已埋(for形式)+UGC" if (mx=="品牌词-平台" and "nintendo" in kw.lower()) else ("直写前台(标题/五点/描述/后台ST)" if mx=="品牌词-平台" else ("UGC评论QA+广告可打" if mx=="品牌词-竞品" else "UGC评论QA"))))
+        ch=("直写前台(标题/五点/描述/后台搜索词)" if mx=="意图词" else ("后台搜索词已埋(for形式)+UGC" if (mx=="品牌词-平台" and "nintendo" in kw.lower()) else ("直写前台(标题/五点/描述/后台搜索词)" if mx=="品牌词-平台" else ("UGC评论QA+广告可打" if mx=="品牌词-竞品" else "UGC评论QA"))))
         kl=kw.lower()
         if is_misspell(kl): status="拼写变体(广告可投·勿写listing)"
         elif is_trademark(kl): status=("⚠️商标在标题/五点·撤(仅描述/ST用for-para措辞)" if (inT or inB) else ("ST合规(for形式)+UGC" if inS else "仅for/compatible措辞+UGC"))
         elif is_comp(kl) or is_ip(kl) or mx in ("品牌词-竞品","IP词"): status="UGC引导(勿直写)"
-        elif fr or inS: status="已埋" if fr else "已埋(ST)"
+        elif fr or inS: status="已埋" if fr else "已埋(后台搜索词)"
         elif mx in ("意图词","品牌词-平台"): status="待埋(补描述)" if qualify_embed(kw,cat,supp,soft,_qa) else "不埋"
         else: status="UGC待引导"
         t2r.append({"关键词":kw,"站点":site,"矩阵":mx,"埋词渠道":ch,"标题已埋":inT,"五点已埋":inB,"描述已埋":inD,"后台ST已埋":inS,"前台已覆盖":fr,"埋词状态":status})
@@ -813,7 +813,15 @@ def compute_audit(L,rows,cat):
     miss=agg_roots(sorted([r for r in embeddable if not(r["front"] or r["instr"])],key=lambda r:-(r["vol"]+r["ord"]*5000)))
     be=len(L["bullets"])==0; de=not L["desc"].strip(); se=not L["st"].strip(); buy="BUYABLE" in (L["status"] or [])
     notext=(not L["title"].strip()) and be and de and se
-    status="空listing" if notext else ("半成品" if (be or de or se or not buy) else "正常")
+    if not L.get("has_record", True):
+        status="店铺没这条Listing"
+    elif not L.get("authored", True):
+        status="本店未自建文案"
+    elif notext:
+        status="文案全空"
+    else:
+        issues=[x for x,c in [("五点没填",be),("描述没填",de),("后台搜索词没填",se),("店铺不可售",not buy)] if c]
+        status="、".join(issues) if issues else "正常"
     return {"total":total,"recorded":len(rk),"p1":len(p1),"p23":len(p23),"deep":len(deep),"embedded":embedded,
             "cover_pct":round(100.0*embedded/max(total,1)),"fit":len(embeddable)+len(ugc),
             "miss":[{"kw":r["kw"],"vol":r["vol"],"ord":r["ord"]} for r in miss[:5]],"status":status}
@@ -833,12 +841,12 @@ def refresh_t2(app,t1,t2,L,cat,site):
         kw=ext(f.get("关键词")); mx=f.get("矩阵")
         if mx not in ("意图词","品牌词-平台","品牌词-竞品","IP词"): continue
         inT=cov(kw,tt);inB=cov(kw,bt);inD=cov(kw,dt);inS=cov(kw,st);fr=cov(kw,front)
-        ch=("直写前台(标题/五点/描述/后台ST)" if mx=="意图词" else ("后台ST已埋(for形式)+UGC" if (mx=="品牌词-平台" and "nintendo" in kw.lower()) else ("直写前台(标题/五点/描述/后台ST)" if mx=="品牌词-平台" else ("UGC评论QA+广告可打" if mx=="品牌词-竞品" else "UGC评论QA"))))
+        ch=("直写前台(标题/五点/描述/后台搜索词)" if mx=="意图词" else ("后台搜索词已埋(for形式)+UGC" if (mx=="品牌词-平台" and "nintendo" in kw.lower()) else ("直写前台(标题/五点/描述/后台搜索词)" if mx=="品牌词-平台" else ("UGC评论QA+广告可打" if mx=="品牌词-竞品" else "UGC评论QA"))))
         kl=kw.lower()
         if is_misspell(kl): status="拼写变体(广告可投·勿写listing)"
         elif is_trademark(kl): status=("⚠️商标在标题/五点·撤(仅描述/ST用for-para措辞)" if (inT or inB) else ("ST合规(for形式)+UGC" if inS else "仅for/compatible措辞+UGC"))
         elif is_comp(kl) or is_ip(kl) or mx in ("品牌词-竞品","IP词"): status="UGC引导(勿直写)"
-        elif fr or inS: status="已埋" if fr else "已埋(ST)"
+        elif fr or inS: status="已埋" if fr else "已埋(后台搜索词)"
         elif mx in ("意图词","品牌词-平台"): status="待埋(补描述)" if qualify_embed(kw,cat,supp,soft,_qa) else "不埋"
         else: status="UGC待引导"
         t2r.append({"关键词":kw,"站点":site,"矩阵":mx,"埋词渠道":ch,"标题已埋":inT,"五点已埋":inB,"描述已埋":inD,"后台ST已埋":inS,"前台已覆盖":fr,"埋词状态":status})
@@ -939,14 +947,17 @@ def do_review(frankie_only=False,dry=False):
             ctr=round(100.0*clk/impr7,2) if impr7 else 0; cvr=round(100.0*ords/clk,1) if clk else 0; acos=round(100.0*cost/sal,1) if sal else 0
             instock=isinstance(fba,(int,float)) and fba>=10; ranked=isinstance(bsr,(int,float)) and bsr>0
             serving=impr2>0; ran7=impr7>0  # 报表驱动(可靠):近2天有曝光=当前在投 / 近7天投过
-            derelict=instock and ranked and not ran7      # 有货+有BSR+近7天0广告曝光=没在投=失职
-            paused_recent=instock and ranked and ran7 and not serving  # 近2天0曝光但7天投过=近期停投(预算耗尽/刚暂停)
+            # 只有正式在跑、且 Listing 已正常可售，才判断广告是否该投。
+            # 筹备中、店铺不可售、文案没填全的项目先处理 Listing/资料，不直接归因到运营广告动作。
+            ad_ready=(status=="在跑" and m["status"]=="正常")
+            derelict=ad_ready and instock and ranked and not ran7
+            paused_recent=ad_ready and instock and ranked and ran7 and not serving
             perf_v=ad_verdict(acos,sal)  # 健康/ACoS偏高/无成交
             budget_advice=""
             if paused_recent:
-                budget_advice=("✅近期停投+ACoS"+str(acos)+"%健康→很可能预算耗尽,值得提预算恢复放量" if perf_v=="健康"
-                    else ("⚠️近期停投+ACoS"+str(acos)+"%偏高→别盲目提,先优化(降bid/加否词/改listing)再恢复" if perf_v=="ACoS偏高"
-                    else "近期停投+7天无成交→查广告相关性/是否该停"))
+                budget_advice=("ACoS"+str(acos)+"%健康，可能是预算用完了，可以考虑恢复预算" if perf_v=="健康"
+                    else ("ACoS"+str(acos)+"%偏高，先优化广告词/出价/Listing，再恢复" if perf_v=="ACoS偏高"
+                    else "7天花过钱但没成交，先查广告相关性，确认是否应该继续投"))
             if not dry:
                 try:
                     tm={x["name"]:x["table_id"] for x in api("GET",f"/bitable/v1/apps/{app2}/tables?page_size=100")["data"]["items"]}
@@ -963,11 +974,11 @@ def do_review(frankie_only=False,dry=False):
             fs=first.get((asin,site)); base_ts=fs[0] if fs else now
             base_cov=_pn(fs[1].get("埋词覆盖率")) if fs else m["cover_pct"]
             days_since=int((now-base_ts)/86400000); todo=[]
-            if m["status"]!="正常": todo.append(f"文案没建全({m['status']})")
+            if m["status"]!="正常": todo.append(f"Listing需先处理({m['status']})")
             else:
                 if m["cover_pct"]<=base_cov and m["miss"]: todo.append(f"埋词{days_since}天没提升(还{len(m['miss'])}个高价值漏埋没补)")
                 if len(L["bullets"])<5: todo.append(f"五点仅{len(L['bullets'])}条<5")
-                if not L["st"].strip(): todo.append("后台ST空")
+                if not L["st"].strip(): todo.append("后台搜索词没填")
             if derelict: todo.append("广告未开")
             overdue=days_since>=GUIDANCE_DAYS and bool(todo); exec_status=("已执行" if not todo else ("逾期未执行" if overdue else "部分执行"))
             res={"product":product,"site":site,"region":region,"op":op,"asin":asin,"haverank":haverank,
@@ -1000,17 +1011,17 @@ def do_review(frankie_only=False,dry=False):
                 m=it["m"]; tag="" if it["first"] else f" (覆盖{_arrow(it['d_cov'])} 收录{_arrow(it['d_rec'])} 首页{_arrow(it['d_p1'])})"
                 lines.append(f"**{it['product']} {it['site']}** · 埋词覆盖 {m['cover_pct']}% · 已收录 {m['recorded']}(首页{m['p1']}) · 合适词 {m['fit']}{tag}")
                 lines.append(f"  🔗 [查看14维深度报告]({REPORT_BASE}/report?asin={it['asin']}&site={it['site']})")
-                if m["status"]!="正常": lines.append(f"  🔴 listing **{m['status']}** → 先补全文案再谈埋词")
+                if m["status"]!="正常": lines.append(f"  🔴 Listing需先处理：**{m['status']}** → 先处理这个，再看埋词和广告")
                 elif not it["haverank"]: lines.append("  ⚪ 收录追踪未铺开(以埋词覆盖率为准)")
                 if m["miss"]: lines.append("  📌 漏埋高价值: "+" / ".join(x["kw"] for x in m["miss"][:4]))
                 if not it["first"] and it["d_cov"]<0: lines.append("  ⚠️ 埋词覆盖**退步**,核对是否改 listing 改丢了词")
-                if it.get("overdue"): lines.append(f"  ⏰ **指导逾期{it['days_since']}天还没执行**: {' / '.join(it['todo'])} → 请按14维建议改 listing / 开广告")
-                if it.get("derelict"): lines.append(f"  🔴 **失职**: 有货(FBA{it['fba']})+BSR#{it['bsr']} 但 **近7天0广告曝光**(没在投) → 立即开广告")
-                elif it.get("paused_recent"): lines.append(f"  🟠 **近期停投**: 近2天0曝光(7天花过${it['cost']}) → {it['budget_advice']}")
+                if it.get("overdue"): lines.append(f"  ⏰ **待办过期{it['days_since']}天**: {' / '.join(it['todo'])} → 先处理上面写明的问题")
+                if it.get("derelict"): lines.append(f"  🔴 **广告没跑**: 系统看到可售、有库存(FBA{it['fba']})、有排名(BSR#{it['bsr']}),但近7天0曝光 → 先确认是否故意停投；不是就恢复广告")
+                elif it.get("paused_recent"): lines.append(f"  🟠 **最近停了**: 近2天0曝光(7天花过${it['cost']}) → {it['budget_advice']}")
                 elif it.get("serving"):
                     pv=it.get("perf_v"); tail=("· 表现健康" if pv=="健康" else (f"· **ACoS偏高该优化**(降bid/加否词/改listing)" if pv=="ACoS偏高" else "· 近7天无成交,查相关性"))
                     lines.append(f"  {'📣' if pv=='健康' else '⚠️'} 广告在投 · 7天花${it['cost']} ACoS{it['acos']}% CTR{it['ctr']}% CVR{it['cvr']}% {tail} · FBA{it['fba']} BSR#{it['bsr']}")
-            md=f"**{day} 万词周自检** · 你负责 {len(items)} 个作战台\n\n"+"\n".join(lines)+"\n\n> 详情开作战台表2;改 listing/开广告 是你的活,系统只审不改。"
+            md=f"**{day} 万词周自检** · 你负责 {len(items)} 个作战台\n\n"+"\n".join(lines)+"\n\n> 系统只提醒问题，不会自动改 Listing 或广告。先看写明的原因，再决定补资料、改文案、上架可售或恢复广告。"
             im_card(oid,f"🟡 [AMZ·P2] 万词周自检 · {op}",md,"orange")
     # Frankie 总digest
     foid=OP_OID.get("潘志聪")
@@ -1019,20 +1030,20 @@ def do_review(frankie_only=False,dry=False):
         improved=[x for x in allr if not x["first"] and (x["d_cov"]>0 or x["d_rec"]>0)]
         stuck=[x for x in allr if x["m"]["status"]!="正常" or (not x["first"] and x["d_cov"]<0)]
         L1=[f"✅ {x['product']} {x['site']}: 覆盖{_arrow(x['d_cov'])} 收录{_arrow(x['d_rec'])}" for x in improved] or ["（本周无明显改善）"]
-        L2=[f"🔴 {x['product']} {x['site']}: "+("listing "+x['m']['status'] if x['m']['status']!='正常' else f"埋词覆盖退步{_arrow(x['d_cov'])}")+f" — 催 {x['op']}" for x in stuck] or ["（无卡住）"]
+        L2=[f"🔴 {x['product']} {x['site']}: "+(f"Listing需先处理：{x['m']['status']}" if x['m']['status']!='正常' else f"埋词覆盖退步{_arrow(x['d_cov'])}")+f" — 负责人 {x['op']}" for x in stuck] or ["（无卡住）"]
         derel=[x for x in allr if x.get("derelict")]; budg=[x for x in allr if x.get("paused_recent")]
-        L4=[f"🔴 {x['product']} {x['site']}: FBA{x['fba']}有货+BSR#{x['bsr']} 但近7天0广告曝光 — 催 {x['op']}" for x in derel] or ["（无）"]
-        L5=[f"🟠 {x['product']} {x['site']}: 近期停投 — {x['budget_advice']}({x['op']})" for x in budg] or ["（无）"]
+        L4=[f"🔴 {x['product']} {x['site']}: 可售+FBA{x['fba']}+BSR#{x['bsr']}，但近7天0广告曝光 — 负责人 {x['op']}" for x in derel] or ["（无）"]
+        L5=[f"🟠 {x['product']} {x['site']}: 最近停了 — {x['budget_advice']}（负责人 {x['op']}）" for x in budg] or ["（无）"]
         overdue_list=[x for x in allr if x.get("overdue")]
-        L6=[f"⏰ {x['product']} {x['site']}: 逾期{x['days_since']}天 — {' / '.join(x['todo'])} — 催 {x['op']}" for x in overdue_list] or ["（无逾期未执行）"]
+        L6=[f"⏰ {x['product']} {x['site']}: 过期{x['days_since']}天 — {' / '.join(x['todo'])} — 负责人 {x['op']}" for x in overdue_list] or ["（无过期待办）"]
         base="(首轮=建立基线,delta 下周起有效)" if all(x["first"] for x in allr) else ""
         md=(f"**{day} 万词周自检总览** · {len(allr)}个作战台 {base}\n\n"
-            f"**🔴 运营失职·有货有排名却近7天0广告曝光 {len(derel)}**\n"+"\n".join(L4)
-            +f"\n\n**🟠 近期停投·近2天0曝光(查预算/误暂停) {len(budg)}**\n"+"\n".join(L5)
-            +f"\n\n**⏰ 指导逾期未执行·过{GUIDANCE_DAYS}天还没按14维建议改listing/开广告 {len(overdue_list)}**\n"+"\n".join(L6)
-            +f"\n\n**📈 埋词改善 {len(improved)}**\n"+"\n".join(L1)+f"\n\n**🚨 listing卡住 {len(stuck)}**\n"+"\n".join(L2)
+            f"**🔴 广告没跑·可售有库存有排名但近7天0曝光 {len(derel)}**\n"+"\n".join(L4)
+            +f"\n\n**🟠 最近停了·近2天0曝光(查预算/是否误停) {len(budg)}**\n"+"\n".join(L5)
+            +f"\n\n**⏰ 待办过期·过{GUIDANCE_DAYS}天还没处理 {len(overdue_list)}**\n"+"\n".join(L6)
+            +f"\n\n**📈 埋词改善 {len(improved)}**\n"+"\n".join(L1)+f"\n\n**🚨 Listing需先处理 {len(stuck)}**\n"+"\n".join(L2)
             +(f"\n\n**⚠️ 异常 {len(errors)}**: "+" / ".join(errors[:8]) if errors else "")
-            +f"\n\n> 广告判定**全部基于报表实际曝光**(spProductAdReports per-asin,可靠;实体接口分页坑已弃用)。失职=有货≥10+有BSR+近7天0曝光;近期停投=7天投过但近2天0曝光。预算建议按ACoS:≤{int(TARGET_ACOS)}%健康才提,高/无成交→先优化。均豁免断货/非BUYABLE。")
+            +f"\n\n> 广告提醒只看正式在跑且 Listing 正常可售的项目。筹备中、不可售、后台搜索词没填、文案没填全的项目，会先归到 Listing 处理，不会直接算广告问题。")
         im_card(foid,f"🟡 [AMZ·P2] 万词周自检总览 · {day}",md,"blue")
     return {"ok":True,"reviewed":len(per_op),"snap":len(new_snap),"errors":errors}
 
@@ -1220,11 +1231,11 @@ code{{background:#1a1a20;padding:1px 5px;border-radius:3px;color:#cfcfd4;font-si
     elif not a["authored"]: banner.append("🟡 本店未自建文案(跟卖他人 ASIN)→ 要埋词须自建独立 listing")
     elif a["notext"]: banner.append("🔴 listing 文案全空 → 请运营核实后台是否建全")
     elif a["be"] or a["de"] or a["se"] or not a["buy"]:
-        mp=[x for x,c in [("五点空",a["be"]),("描述空",a["de"]),("后台ST空",a["se"]),("非BUYABLE",not a["buy"])] if c]
-        banner.append("🔴 listing 是半成品："+" / ".join(mp)+" → 先补全文案/上架可售")
+        mp=[x for x,c in [("五点没填",a["be"]),("描述没填",a["de"]),("后台搜索词没填",a["se"]),("店铺不可售",not a["buy"])] if c]
+        banner.append("🔴 Listing需先处理："+" / ".join(mp)+" → 先处理这个，再看埋词和广告")
     if a["front_ip"]: banner.append(f"🔴 标题/五点里有 IP/疑似IP词 <code class=red>{esc(', '.join(a['front_ip']))}</code> 写在前台 → 侵权风险最高,建议改成描述性词或移走(IP 联想只走买家 Review/QA)")
-    if a["st_ip"]: banner.append(f"🔴 后台搜索词 ST 里有 IP/疑似IP词 <code class=red>{esc(', '.join(a['st_ip']))}</code> 写在线上 → 侵权风险,建议尽快删(IP 联想只走买家 Review/QA)")
-    if a["st_mis"]: banner.append(f"🟠 后台 ST 有拼写错词 <code class=warn>{esc(', '.join(set(a['st_mis'])))}</code> → 删或改正")
+    if a["st_ip"]: banner.append(f"🔴 后台搜索词里有 IP/疑似IP词 <code class=red>{esc(', '.join(a['st_ip']))}</code> 写在线上 → 侵权风险,建议尽快删(IP 联想只走买家 Review/QA)")
+    if a["st_mis"]: banner.append(f"🟠 后台搜索词有拼写错词 <code class=warn>{esc(', '.join(set(a['st_mis'])))}</code> → 删或改正")
     if banner:
         h.append("<div class=box style='border-color:#ff5c66;background:#2a161a'><b class=red>🔴 头号问题(优先处理)</b><ul style='margin:6px 0'>"+"".join(f"<li>{b}</li>" for b in banner)+"</ul></div>")
     # 三关键数
@@ -1241,7 +1252,7 @@ code{{background:#1a1a20;padding:1px 5px;border-radius:3px;color:#cfcfd4;font-si
      ("埋词覆盖",f"{a['embedded']} 个目标词已进文案(覆盖 {a['cover_pct']}%);下方『漏埋补词清单』是剔噪后可直写补的高价值词",CH),
      ("标题关键词顺序",(f"标题缺:<b class=warn>{esc(miss_t)}</b> → 建议结构见下『标题诊断』" if miss_t else "标题已含品牌+核心词+机型,顺序合理"),(RW if miss_t else GN)),
      ("人群/使用场景",("文案已含场景/人群词" if a["has_scene"] else "文案只罗列功能,缺『给谁用/什么场景/送礼』→ 描述补场景句"),(GN if a["has_scene"] else RW)),
-     ("后台搜索词",("ST 有问题(见头号问题)→ 用下方『建议ST草稿』替换" if (a["st_ip"] or a["st_mis"]) else "ST 已填;下方给『建议ST草稿』(去噪+补漏埋top)"),(RW if (a["st_ip"] or a["st_mis"]) else CH)),
+     ("后台搜索词",("后台搜索词有问题(见头号问题)→ 用下方『建议后台搜索词草稿』替换" if (a["st_ip"] or a["st_mis"]) else "后台搜索词已填;下方给『建议后台搜索词草稿』(去噪+补漏埋top)"),(RW if (a["st_ip"] or a["st_mis"]) else CH)),
      ("兼容机型",f"本品支持机型推导={'/'.join(sorted(a['supp'])) or '2'};{'标题缺 Lite 已在标题诊断提示' if any('Lite' in m for m in a['miss_title']) else '机型词写全'}",CH),
      ("品牌官方叫法",(f"缺:<b class=warn>{esc(miss_t)}</b>(品牌词 SEO+品牌光环)" if miss_t else "品牌官方叫法已用"),(RW if miss_t else GN)),
      ("标题首屏","标题开头(手机可见部分)建议含核心词+机型,关键信息别挤到尾部",CH),
@@ -1255,8 +1266,8 @@ code{{background:#1a1a20;padding:1px 5px;border-radius:3px;color:#cfcfd4;font-si
      ("AI推荐池/毛利","本次没做,需单独拉","⚪ 本次没做"),
      ("listing健康+合规",
       ("🔴 标题/五点有 IP 词需改(见上)" if a["front_ip"] else
-       ("🔴 ST 有 IP/拼写问题需改(见上)" if a["st_ip"] else
-        ("🔴 半成品/跟卖见上" if (a['be'] or a['de'] or a['se'] or not a['buy'] or not a['authored'] or not a['has_record']) else
+       ("🔴 后台搜索词有 IP/拼写问题需改(见上)" if a["st_ip"] else
+        ("🔴 Listing需先处理，原因见上" if (a['be'] or a['de'] or a['se'] or not a['buy'] or not a['authored'] or not a['has_record']) else
          ("🟠 标题/五点含 nintendo 商标 → 兼容措辞 for/compatible 可,裸写品牌名建议改 for Switch 2" if a["front_tm"] else
           ("🟠 标题/五点含竞品品牌 → 建议移走(走 SD 商品定投打竞品)" if a["front_comp"] else "状态可售,合规无裸写品牌/IP"))))),
       ("🔴 需改" if (a['front_ip'] or a['st_ip'] or a['be'] or a['de'] or a['se'] or not a['buy'] or not a['authored'] or not a['has_record']) else ("🟠 可优化" if (a['front_tm'] or a['front_comp']) else GN))),
@@ -1276,22 +1287,22 @@ code{{background:#1a1a20;padding:1px 5px;border-radius:3px;color:#cfcfd4;font-si
     h.append("<h2>② 五点诊断（结构指引，运营改写）</h2>")
     h.append(f"<div class=box>现 <b>{a['nbul']}</b> 条。"+("<span class=warn>缺痛点开头。</span>" if not a['has_pain'] else "")+("<span class=warn>缺信任/售后段。</span>" if not a['has_after'] else "")+("<span class=warn>条数偏少,可补到 6-7 条(别为凑 5 条牺牲埋词)。</span>" if a['nbul']<6 else "")+"<br><span class=sub>建议结构:① 痛点+核心词(如 No More Drift / hall effect) ② 痛点+差异化功能 ③ 核心+场景(机型/PC/手机) ④ 惊喜差异化锚点 ⑤ 唤醒/App 单独条 ⑥ 售后保障(保修+退换+客服)。把漏埋的关键词变体铺进各条。</span></div>")
     # ④ ST 建议草稿
-    h.append("<h2>③ 后台搜索词 ST · 建议草稿（可直接抄，运营按本地语言微调）</h2>")
-    h.append(f"<div class=box><span class=old>现 ST：</span><br>{esc(L['st']) or '（空）'}</div>")
+    h.append("<h2>③ 后台搜索词 · 建议草稿（可直接抄，运营按本地语言微调）</h2>")
+    h.append(f"<div class=box><span class=old>现后台搜索词：</span><br>{esc(L['st']) or '（空）'}</div>")
     if a["st_ip"] or a["st_mis"]:
         h.append(f"<div class=box><b class=red>删：</b> {esc(', '.join(list(a['st_ip'])+list(set(a['st_mis']))))}（IP/拼写错词,侵权或低质）</div>")
-    h.append(f"<div class=box><span class=new>建议 ST 草稿（去噪+补漏埋高价值词，{a['st_sug_bytes']} 字节，≤250）：</span><br><b>{esc(a['st_sug'])}</b><br><br><span class=sub>已去 IP/拼写错/竞品词;补了下方漏埋 Top 词。nintendo 如要保留只用兼容措辞 compatible with/for；运营按本地语言核对通顺度。</span></div>")
+    h.append(f"<div class=box><span class=new>建议后台搜索词草稿（去噪+补漏埋高价值词，{a['st_sug_bytes']} 字节，≤250）：</span><br><b>{esc(a['st_sug'])}</b><br><br><span class=sub>已去 IP/拼写错/竞品词;补了下方漏埋 Top 词。nintendo 如要保留只用兼容措辞 compatible with/for；运营按本地语言核对通顺度。</span></div>")
     # 核心重要词 · 全层覆盖(Frankie 铁律)
-    h.append("<h2>🎯 核心重要词 · 全层覆盖检查（权重最大化）</h2><div class=sub>🚨 Frankie 铁律:<b>重要核心词必须在 标题 / 五点 / 描述 / 后台ST 四层都有</b>,权重才最大化。下表 <span class=red>✗</span> = 该层缺,建议补上(核心词重复出现在各层不算堆词,是有意强化)。</div>")
-    h.append("<table><tr><th>核心词</th><th class=num>月搜量</th><th>标题</th><th>五点</th><th>描述</th><th>ST</th><th>缺哪层 → 补</th></tr>")
+    h.append("<h2>🎯 核心重要词 · 全层覆盖检查（权重最大化）</h2><div class=sub>🚨 Frankie 铁律:<b>重要核心词必须在 标题 / 五点 / 描述 / 后台搜索词 四层都有</b>,权重才最大化。下表 <span class=red>✗</span> = 该层缺,建议补上(核心词重复出现在各层不算堆词,是有意强化)。</div>")
+    h.append("<table><tr><th>核心词</th><th class=num>月搜量</th><th>标题</th><th>五点</th><th>描述</th><th>后台搜索词</th><th>缺哪层 → 补</th></tr>")
     for c in a["core_cov"]:
         mk=lambda b:"✅" if b else "<span class=red>✗</span>"
-        miss=[n for n,b in [("标题",c["t"]),("五点",c["b"]),("描述",c["d"]),("ST",c["s"])] if not b]
+        miss=[n for n,b in [("标题",c["t"]),("五点",c["b"]),("描述",c["d"]),("后台搜索词",c["s"])] if not b]
         v="{:,}".format(int(c["vol"])) if c["vol"] else "—"
         h.append(f"<tr><td class=kw>{esc(c['kw'])}</td><td class=num>{v}</td><td>{mk(c['t'])}</td><td>{mk(c['b'])}</td><td>{mk(c['d'])}</td><td>{mk(c['s'])}</td><td class=warn>{('、'.join(miss)) if miss else '四层全有 ✅'}</td></tr>")
     h.append("</table>")
     if a["core_gap"]:
-        h.append(f"<div class=box class=warn>⚠️ 有 {a['core_gap']} 个核心词没做到四层全覆盖 → 按上表把缺的层补上(标题靠前、五点铺进各条、描述自然嵌、ST 收尾),权重最大化。</div>")
+        h.append(f"<div class=box class=warn>⚠️ 有 {a['core_gap']} 个核心词没做到四层全覆盖 → 按上表把缺的层补上(标题靠前、五点铺进各条、描述自然嵌、后台搜索词收尾),权重最大化。</div>")
     # 漏埋补词
     h.append("<h2>📌 高价值漏埋词根 Top20 · 可直写补埋</h2><div class=sub>已按差异化词根聚合(机型变体合并,不堆词);商标/竞品/IP/游戏/别平台/拼写变体已排除。月搜量为同根累加。</div>")
     h.append("<table><tr><th>关键词</th><th>矩阵</th><th class=num>月搜量</th><th class=num>已出单</th></tr>")
@@ -1302,7 +1313,7 @@ code{{background:#1a1a20;padding:1px 5px;border-radius:3px;color:#cfcfd4;font-si
     # IP UGC
     h.append("<h2>🚫 IP / 敏感词 · UGC 埋词建议（不进 listing，走 Review/QA）</h2>")
     if meta.get("licensed"):
-        h.append(f"<div class=box class=grn>✅ 本品是 <b>{esc(meta.get('ip_assoc') or '官方授权联名')}</b> —— 授权 IP 词<b>可直写</b>进标题/五点/描述/ST(非 UGC),应主动埋(品牌联名 SEO)。下方 UGC 仅针对<b>未授权</b> IP/商标/竞品。</div>")
+        h.append(f"<div class=box class=grn>✅ 本品是 <b>{esc(meta.get('ip_assoc') or '官方授权联名')}</b> —— 授权 IP 词<b>可直写</b>进标题/五点/描述/后台搜索词(非 UGC),应主动埋(品牌联名 SEO)。下方 UGC 仅针对<b>未授权</b> IP/商标/竞品。</div>")
     if meta.get("ip_assoc") and not meta.get("licensed"):
         h.append(f"<div class=box><b>本品 IP 联想（产品库）：</b> {esc(meta['ip_assoc'])} → 绝不直写进 listing,靠买家 Review/QA 自然提</div>")
     elif a["ip_lib"]:
