@@ -73,6 +73,8 @@ class ListingReportTest(unittest.TestCase):
             {"关键词": "manette fire tv", "矩阵": "排除-别品类", "月搜索量": 2074, "已出单单量": 0, "我方自然排名": 0},
             {"关键词": "8bitdo controller", "矩阵": "品牌词-竞品", "月搜索量": 1800, "已出单单量": 0, "我方自然排名": 0},
             {"关键词": "legend of zelda controller", "矩阵": "IP词", "月搜索量": 900, "已出单单量": 1, "我方自然排名": 0},
+            {"关键词": "g7 pro controller", "矩阵": "意图词", "月搜索量": 2500, "已出单单量": 0, "我方自然排名": 0},
+            {"关键词": "backbone controller", "矩阵": "意图词", "月搜索量": 2000, "已出单单量": 0, "我方自然排名": 0},
         ]
         audit = self.app.audit14(self.sample_meta(), self.sample_listing(), rows)
 
@@ -84,9 +86,13 @@ class ListingReportTest(unittest.TestCase):
         self.assertNotIn("manette fire tv", direct_terms)
         self.assertNotIn("8bitdo controller", direct_terms)
         self.assertNotIn("legend of zelda controller", direct_terms)
+        self.assertNotIn("g7 pro controller", direct_terms)
+        self.assertNotIn("backbone controller", direct_terms)
         self.assertIn("manette fire tv", noise_terms)
         self.assertIn("8bitdo controller", ugc_terms)
         self.assertIn("legend of zelda controller", ugc_terms)
+        self.assertIn("g7 pro controller", ugc_terms)
+        self.assertIn("backbone controller", ugc_terms)
 
 
 if __name__ == "__main__":
