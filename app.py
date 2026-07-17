@@ -17,6 +17,8 @@ RANK_BASE=os.environ.get("WANCI_RANK_BASE","EEKNbZ8b8aqv6msOaTscotBDn5f")
 SNAP_TB=os.environ.get("WANCI_SNAP_TB","tbl3OipVxS8wyjKk")  # 万词周快照表(总台App内)
 TARGET_ACOS=float(os.environ.get("WANCI_TARGET_ACOS","35"))  # 目标ACoS%(默认35,低于食人花dock~40盈亏平衡;判提预算/优化的阈值)
 GUIDANCE_DAYS=int(os.environ.get("WANCI_GUIDANCE_DAYS","7"))  # 14维建议发出N天后复查待办是否处理
+APP_VERSION=os.environ.get("APP_VERSION") or os.environ.get("ZEABUR_GIT_COMMIT_SHA") or os.environ.get("GIT_COMMIT") or "local"
+REVIEW_RUN_LOG=os.environ.get("WANCI_REVIEW_RUN_LOG") or os.path.join(tempfile.gettempdir(),"wanci_review_runs.jsonl")
 def ad_verdict(acos,sal):
     """广告表现判定(供"是否值得提预算"):盈利(ACoS≤target)=健康;否则需优化。"""
     if sal<=0: return "无成交"
@@ -101,6 +103,47 @@ def upload_file(path,name):
     return json.load(urllib.request.urlopen(req,timeout=120))["data"]["file_key"]
 def im_file(oid,fk): api("POST","/im/v1/messages?receive_id_type=open_id",{"receive_id":oid,"msg_type":"file","content":json.dumps({"file_key":fk})})
 
+_review_runs={}
+_review_lock=threading.Lock()
+def _now_iso():
+    return datetime.datetime.now(datetime.timezone.utc).astimezone(datetime.timezone(datetime.timedelta(hours=8))).isoformat(timespec="seconds")
+def _review_log(event):
+    try:
+        with io.open(REVIEW_RUN_LOG,"a",encoding="utf-8") as f:
+            f.write(json.dumps(event,ensure_ascii=False,separators=(",",":"))+"\n")
+    except Exception as e:
+        print(f"[review] log_write_failed {e}",flush=True)
+def review_run_update(run_id,**fields):
+    if not run_id: return
+    event={"run_id":run_id,"event_time":_now_iso(),**fields}
+    with _review_lock:
+        cur=_review_runs.setdefault(run_id,{"run_id":run_id,"version":APP_VERSION})
+        cur.update(event)
+    _review_log(event)
+def review_run_list(limit=20):
+    rows={}
+    try:
+        if os.path.exists(REVIEW_RUN_LOG):
+            with io.open(REVIEW_RUN_LOG,"r",encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        ev=json.loads(line)
+                        rid=ev.get("run_id")
+                        if rid: rows.setdefault(rid,{"run_id":rid}).update(ev)
+                    except Exception: pass
+    except Exception: pass
+    with _review_lock:
+        for rid,run in _review_runs.items():
+            rows.setdefault(rid,{}).update(run)
+    return sorted(rows.values(),key=lambda x:x.get("event_time",""),reverse=True)[:limit]
+def run_review(run_id,frankie_only=False,dry=False):
+    try:
+        return do_review(frankie_only=frankie_only,dry=dry,run_id=run_id)
+    except Exception as e:
+        review_run_update(run_id,status="failed",finished_at=_now_iso(),error=str(e)[:500])
+        print(f"[review] failed run_id={run_id} err={e}",flush=True)
+        return {"ok":False,"err":str(e)[:200],"run_id":run_id}
+
 # ───────────────── 埋词相关性引擎 (与本地 audit_listing 一致) ─────────────────
 STOP=set(['for','with','the','and','a','of','to','in','on','one','up','it','is','our','you','your','no','will'])
 def stem(w):
@@ -150,7 +193,7 @@ def incompatible_machine(kw,supp):
     if "lite" in k and "lite" not in supp: return True
     if (" switch 1 " in k or "switch one" in k or "switch 1 " in k) and "1" not in supp: return True
     return False
-TRADEMARK=["nintendo"]  # 主机商标(sony/microsoft 已在 OTHER_PLATFORM);走UGC/仅for-compatible措辞,不直写标题五点
+TRADEMARK=["nintendo","joy-con","joycon"]  # 主机商标(sony/microsoft 已在 OTHER_PLATFORM);走UGC/仅for-compatible措辞,不直写标题五点
 def is_trademark(k): kl=" "+k.lower()+" "; return any(t in kl for t in TRADEMARK)
 MISSPELL=[r'\bswich\b',r'\bswithc\b',r'\bswtich\b','switch2','nintendoswitch',r'\bprocontroller\b',r'\bninendo\b',r'\bnintedo\b',r'\bnintndo\b',r'\bcontoller\b',r'\bcontroler\b',r'\bcontorller\b',r'\bgamepd\b']
 def is_misspell(k):
@@ -162,6 +205,12 @@ def is_laptop_dock(k): kl=" "+k.lower()+" "; return any(s in kl for s in LAPTOP_
 # 跨品类噪音(林明坚 2026-06-23: joystick avion=法语飞机摇杆): 含 joystick/manette/control 锚点但其实是别产品(飞行摇杆/赛车方向盘/街机摇杆)
 CROSS_NOISE=["avion","aereo","aircraft","airplane","flight stick","flightstick"," flight "," flying "," plane "," rc "," drone ","volant","steering wheel","racing wheel"," lenkrad "," yoke "," throttle ","hotas","arcade stick"," fight stick","fightstick","joystick arcade"," ausom "]  # ausom=电动车/平衡车品牌(陈翔宇 2026-06-27),非游戏配件,排除
 def is_cross_noise(k): kl=" "+k.lower()+" "; return any(n in kl for n in CROSS_NOISE)
+def listing_direct_allowed_matrix(mx):
+    """Whether a keyword matrix label is safe to show in the direct Listing copy bucket."""
+    m=ss(mx).strip()
+    if not m: return True
+    if m.startswith("排除"): return False
+    return m not in ("IP词","品牌词-竞品")
 def qualify_embed(kw,cat,supp,soft=False,attrs=None):
     k=kw.lower()
     if is_trademark(k) or is_misspell(k): return False  # 商标走UGC / 拼写变体只投广告不写listing
@@ -442,8 +491,9 @@ def make_html(product,site,asin,store,L,rows,cat):
     R=[]
     for r in rows:
         f=r["fields"]; kw=ext(f.get("关键词"))
-        R.append({"kw":kw,"mx":f.get("矩阵"),"vol":float(ext(f.get("月搜索量")) or 0),"ord":float(ext(f.get("已出单单量")) or 0),
-                  "rank":float(ext(f.get("我方自然排名")) or 0),"front":cov(kw,front),"instr":cov(kw,st),"qual":qualify_embed(kw,cat,supp,soft,_qa)})
+        mx=ss(f.get("矩阵"))
+        R.append({"kw":kw,"mx":mx,"vol":float(ext(f.get("月搜索量")) or 0),"ord":float(ext(f.get("已出单单量")) or 0),
+                  "rank":float(ext(f.get("我方自然排名")) or 0),"front":cov(kw,front),"instr":cov(kw,st),"qual":listing_direct_allowed_matrix(mx) and qualify_embed(kw,cat,supp,soft,_qa)})
     total=len(R); embedded=sum(1 for r in R if r["front"] or r["instr"])
     rk=[r for r in R if r["rank"]>0]; p1=[r for r in rk if r["rank"]<=16]; p23=[r for r in rk if 16<r["rank"]<=48]; deep=[r for r in rk if r["rank"]>48]
     sens=lambda r: r["mx"] in ("IP词","品牌词-竞品") or is_ip(r["kw"]) or is_comp(r["kw"]) or is_trademark(r["kw"])
@@ -465,7 +515,7 @@ def make_html(product,site,asin,store,L,rows,cat):
     nlabel=lambda r:("拼写变体→广告可投·勿写listing" if is_misspell(r["kw"]) else ("笔记本/PC扩展坞→别品类剔" if is_laptop_dock(r["kw"]) else esc(r["mx"])+"→疑噪"))
     nz_h="\n".join(f"<tr><td class='kw' style='color:#8b94a3'>{esc(r['kw'])}</td><td><span class='tag n'>{nlabel(r)}</span></td><td class='num'>{('{:,}'.format(int(r['vol']))) if r['vol'] else '—'}</td></tr>" for r in nz[:15]) or "<tr><td colspan=3 style='color:#6b7280'>（无）</td></tr>"
     if not L.get("has_record",True):
-        hb=f"""<div class="callout c-yel"><h2 style="margin-top:0">🟡 跟卖 / 本店无自建 listing</h2><ul><li>该 seller_sku 在本店<strong>无 listing 记录</strong>（纯跟卖他人 ASIN 的 offer，或 sku 填错）。</li><li>无法编辑被跟卖 listing 的文案 → <strong>埋词需先自建独立 listing</strong>。下方「已收录」来自反查仍有效。</li></ul></div>"""
+        hb=f"""<div class="callout c-yel"><h2 style="margin-top:0">🟡 跟卖 / 本店无自建 Listing</h2><ul><li>该店铺 SKU 在本店<strong>无 Listing 记录</strong>（纯跟卖他人 ASIN，或店铺 SKU 填错）。</li><li>无法编辑被跟卖 Listing 的文案 → <strong>埋词需先自建独立 Listing</strong>。下方「已收录」来自反查仍有效。</li></ul></div>"""
     elif not L.get("authored",True):
         hb=f"""<div class="callout c-yel"><h2 style="margin-top:0">🟡 跟卖 / 未自建文案</h2><ul><li>本店只挂 offer 匹配到已有 ASIN，标题《{esc(L['title'][:60])}》来自<strong>被跟卖 listing</strong>，我方<strong>未自建五点/描述/后台搜索词</strong>（attributes 无 item_name/bullet_point）。</li><li>→ 无法埋词；要埋词须<strong>自建独立 listing</strong>（或在拥有该 listing 文案的店铺操作）。非领星同步问题。</li></ul></div>"""
     elif notext:
@@ -698,6 +748,46 @@ def resolve_store(asin,site,store_name=None):
         except Exception: continue
         if sku: return s["sid"],sku,(s.get("name") or f"sid{s['sid']}")
     return None,None,None
+
+def listing_candidates(asin,site):
+    try: sl=lx("/erp/sc/data/seller/lists",{}).get("data") or []
+    except Exception: return []
+    cn=SITE_CN.get(_ss(site),_ss(site))
+    stores=[s for s in sl if s.get("country")==cn]
+    stores.sort(key=lambda s:0 if any(p in (s.get("name") or "").lower() for p in MAIN_STORE) else 1)
+    out=[]
+    for s in stores:
+        try: sku=lookup_sku(s["sid"],asin)
+        except Exception: sku=None
+        if sku:
+            out.append({"店铺编号":s["sid"],"店铺名":s.get("name") or f"sid{s['sid']}","店铺 SKU":sku})
+    return out
+
+def missing_config_candidates(include_all=False,commit=False):
+    rows=[]
+    for r in lall(REG_APP,REG_TB):
+        f=r["fields"]
+        status=ss(f.get("状态")); daily=ss(f.get("是否每天更新"))
+        if not include_all and not (status=="在跑" and daily=="会每天更新"): continue
+        product=ext(f.get("产品")); site=ss(f.get("站点")); asin=ext(f.get("ASIN"))
+        owner=ext(f.get("负责运营")); sid=ext(f.get("店铺sid")); sku=ext(f.get("seller_sku")); cat=ext(f.get("品类"))
+        miss=[]
+        if not owner: miss.append("负责人")
+        if not sid: miss.append("店铺编号")
+        if not sku: miss.append("店铺 SKU")
+        if not cat: miss.append("品类")
+        if not miss: continue
+        cands=listing_candidates(asin,site) if asin and site and ("店铺编号" in miss or "店铺 SKU" in miss) else []
+        wrote=False
+        if commit and len(cands)==1 and ("店铺编号" in miss or "店铺 SKU" in miss):
+            sid_val=cands[0]["店铺编号"]
+            try: sid_val=int(sid_val)
+            except Exception: pass
+            upd(REG_APP,REG_TB,r["record_id"],{"店铺sid":sid_val,"seller_sku":cands[0]["店铺 SKU"]})
+            wrote=True
+        rows.append({"record_id":r["record_id"],"产品":product,"站点":site,"ASIN":asin,"状态":status,"是否每天更新":daily,
+                     "缺少字段":miss,"候选Listing":cands,"可自动补店铺资料":len(cands)==1,"已写入店铺资料":wrote})
+    return rows
 # ───────────────── 主编排 ─────────────────
 def process(rid):
     rec=api("GET",f"/bitable/v1/apps/{REG_APP}/tables/{APPLY_TB}/records/{rid}")["data"]["record"]["fields"]
@@ -759,24 +849,42 @@ def process(rid):
         batch(app,T1,t1d); batch(app,T4,t4d) if t4d else 0
         log.append(f"导词库 表1={len(t1d)} 表4={len(t4d)}"+("(清旧重导刷新)" if had else "")+(f" ⚠️跳过{len(skipped)}坏文件:{','.join(skipped)}" if skipped else ""))
         # 4. 登记总台(幂等)
-        exist={(ext(x["fields"].get("ASIN")),x["fields"].get("站点")) for x in lall(REG_APP,REG_TB)}
-        if (asin,site) not in exist:
-            api("POST",f"/bitable/v1/apps/{REG_APP}/tables/{REG_TB}/records",{"fields":{"产品":product,"站点":site,"ASIN":asin,"父ASIN":g("父ASIN"),"Sorftime_domain":domain,"作战台App_token":app,"词库表id":T1,"表4排名收录id":T4,"rank基础表token":RANK_BASE,"状态":"筹备","数据源":rec.get("数据源") or "人手卖家精灵","区域":region,"备注":"L2自动上线"}})
+        reg_rows=lall(REG_APP,REG_TB)
+        reg_by_key={(ext(x["fields"].get("ASIN")),_ss(x["fields"].get("站点"))):x for x in reg_rows}
+        reg_row=reg_by_key.get((asin,site))
+        reg_rid=reg_row["record_id"] if reg_row else ""
+        if not reg_row:
+            res=api("POST",f"/bitable/v1/apps/{REG_APP}/tables/{REG_TB}/records",{"fields":{"产品":product,"站点":site,"ASIN":asin,"父ASIN":g("父ASIN"),"Sorftime_domain":domain,"作战台App_token":app,"词库表id":T1,"表4排名收录id":T4,"rank基础表token":RANK_BASE,"状态":"筹备","数据源":rec.get("数据源") or "人手卖家精灵","区域":region,"备注":"L2自动上线"}})
+            reg_rid=((res.get("data") or {}).get("record") or {}).get("record_id","")
             log.append("已登记总台")
         # 5. seller_sku + listing
         if not sku: sku=lookup_sku(sid,asin)
+        if reg_rid:
+            cfg={}
+            if op: cfg["负责运营"]=op
+            if sid: cfg["店铺sid"]=sid
+            if sku: cfg["seller_sku"]=sku
+            if cat: cfg["品类"]=cat
+            if cfg:
+                upd(REG_APP,REG_TB,reg_rid,cfg)
         appurl=f"https://u1wpma3xuhr.feishu.cn/base/{app}"
         oid=OP_OID.get(op)
         if sku:
             lr=lx("/listing/publish/openapi/amazon/product/search",{"store_id":sid,"skus":[sku]})
             L=load_listing(lr)
-            html=make_html(product,site,asin,store or f"sid{sid}",L,[r for r in lall(app,T1) if r["fields"].get("站点")==site],cat)
-            hp=os.path.join(tmp,f"audit_{asin}_{site}.html"); io.open(hp,"w",encoding="utf-8").write(html)
+            rows=[r["fields"] for r in lall(app,T1) if ss(r["fields"].get("站点")) in ("",site)]
+            brand,ip_assoc,licensed,bxh=PRODUCT_META.get(product,("","",False,""))
+            meta=dict(product=product,site=site,asin=asin,sid=sid,sku=sku,app=app,t1=T1,cat=cat,op=op,
+                      store=store or STORE14.get(sid,f"sid{sid}"),brand=brand,ip_assoc=ip_assoc,licensed=licensed)
+            meta["品牌型号"]=bxh
+            html=render14(meta,L,audit14(meta,L,rows))
+            hp=os.path.join(tmp,f"audit14_{asin}_{site}.html"); io.open(hp,"w",encoding="utf-8").write(html)
             n2,n3,n5,n6=fill_234(app,T1,T2,T3,T5,T6,L,cat,site)
             log.append(f"填表 表2={n2} 表3={n3} 表5={n5} 表6={n6}")
             if oid:
-                fk=upload_file(hp,f"{product}-{site}-listing审计.html")
-                im_text(oid,f"✅【万词·Listing审计完成】{product} {site} 作战台已建好+6表全填好+审计报告(HTML,浏览器开)请查收。")
+                fk=upload_file(hp,f"{product}-{site}-listing审计_14维.html")
+                report_url=f"{REPORT_BASE}/report?asin={asin}&site={site}"
+                im_text(oid,f"✅【万词·14维Listing审计完成】{product} {site} 作战台已建好+6表全填好。审计报告已按旧版14维结构生成。\n在线报告：{report_url}\n附件也已发送，请用浏览器打开查看。")
                 im_file(oid,fk); log.append(f"已发运营 {op}")
             final_status="已完成"
         else:
@@ -904,8 +1012,9 @@ def store_listing_meta(sid):
             off+=len(d)
     except Exception: pass
     return out
-def do_review(frankie_only=False,dry=False):
+def do_review(frankie_only=False,dry=False,run_id=None):
     day=time.strftime("%Y-%m-%d")
+    review_run_update(run_id,status="running",started_at=_now_iso(),version=APP_VERSION,frankie_only=frankie_only,dry_run=dry)
     print(f"[review] start frankie_only={frankie_only} dry={dry}",flush=True)
     _adc={}; _metac={}; _perfc={}
     def admap(sid):
@@ -920,6 +1029,7 @@ def do_review(frankie_only=False,dry=False):
     reg=[r for r in lall(REG_APP,REG_TB) if ss(r["fields"].get("状态")) in ("在跑","筹备")]
     snaps=lall(REG_APP,SNAP_TB)
     print(f"[review] loaded reg={len(reg)} snaps={len(snaps)}",flush=True)
+    review_run_update(run_id,rows_loaded=len(reg),prior_snapshots=len(snaps))
     prev={}; first={}
     for s in snaps:
         f=s["fields"]; k=(ext(f.get("ASIN")),ss(f.get("站点"))); ts=f.get("快照时间") or 0
@@ -998,9 +1108,12 @@ def do_review(frankie_only=False,dry=False):
             errors.append(f"{product}-{site}:{str(e)[:80]}")
     print(f"[review] computed new_snap={len(new_snap)} operators={len(per_op)} errors={len(errors)}",flush=True)
     if errors: print("[review] errors "+" | ".join(errors[:8]),flush=True)
+    review_run_update(run_id,rows_checked=len(new_snap),operator_count=len(per_op),error_count=len(errors),errors=errors[:20])
+    written=0
     if new_snap and not dry:
         written=batch(REG_APP,SNAP_TB,new_snap)
         print(f"[review] wrote snapshots={written}",flush=True)
+    review_run_update(run_id,snapshot_count_written=written)
     # 每运营卡
     if not frankie_only and not dry:
         for op,items in per_op.items():
@@ -1045,7 +1158,9 @@ def do_review(frankie_only=False,dry=False):
             +(f"\n\n**⚠️ 异常 {len(errors)}**: "+" / ".join(errors[:8]) if errors else "")
             +f"\n\n> 广告提醒只看正式在跑且 Listing 正常可售的项目。筹备中、不可售、后台搜索词没填、文案没填全的项目，会先归到 Listing 处理，不会直接算广告问题。")
         im_card(foid,f"🟡 [AMZ·P2] 万词周自检总览 · {day}",md,"blue")
-    return {"ok":True,"reviewed":len(per_op),"snap":len(new_snap),"errors":errors}
+    result={"ok":True,"reviewed":sum(len(v) for v in per_op.values()),"operators":len(per_op),"snap":len(new_snap),"written":written,"errors":errors,"run_id":run_id}
+    review_run_update(run_id,status="success",finished_at=_now_iso(),reviewed=result["reviewed"],operators=len(per_op),snapshots=len(new_snap),snapshot_count_written=written,error_count=len(errors))
+    return result
 
 
 
@@ -1119,8 +1234,9 @@ def audit14(meta, L, rows):
     R=[]
     for f in rows:
         kw=ext(f.get("关键词"))
-        R.append({"kw":kw,"mx":f.get("矩阵"),"vol":float(ext(f.get("月搜索量")) or 0),"ord":float(ext(f.get("已出单单量")) or 0),
-                  "rank":float(ext(f.get("我方自然排名")) or 0),"front":cov(kw,front),"instr":cov(kw,stt),"qual":qualify_embed(kw,cat,supp,soft,_qa)})
+        mx=ss(f.get("矩阵"))
+        R.append({"kw":kw,"mx":mx,"vol":float(ext(f.get("月搜索量")) or 0),"ord":float(ext(f.get("已出单单量")) or 0),
+                  "rank":float(ext(f.get("我方自然排名")) or 0),"front":cov(kw,front),"instr":cov(kw,stt),"qual":listing_direct_allowed_matrix(mx) and qualify_embed(kw,cat,supp,soft,_qa)})
     total=len(R); embedded=sum(1 for r in R if r["front"] or r["instr"])
     rk=[r for r in R if r["rank"]>0]; p1=[r for r in rk if r["rank"]<=16]; p23=[r for r in rk if 16<r["rank"]<=48]; deep=[r for r in rk if r["rank"]>48]
     sens=lambda r: r["mx"] in ("IP词","品牌词-竞品") or is_ip(r["kw"]) or is_comp(r["kw"]) or is_trademark(r["kw"])
@@ -1222,12 +1338,38 @@ code{{background:#1a1a20;padding:1px 5px;border-radius:3px;color:#cfcfd4;font-si
 .tier b{{font-size:18px}}
 </style></head><body><div class=wrap>""")
     h.append(f"<h1>{esc(meta['product'])} · {site} · Listing 系统化审计(14维)</h1>")
-    h.append(f"<p class=sub>店 {esc(meta['store'])} / sku {esc(meta['sku'])} / ASIN {meta['asin']} · 品类 {cat} · 负责运营 {meta['op']} · 审计口径: Listing Audit Template (R1-R6/C/S/T+H) · 数据驱动自动生成</p>")
+    h.append(f"<p class=sub>店铺 {esc(meta['store'])} / 店铺 SKU {esc(meta['sku'])} / ASIN {meta['asin']} · 品类 {cat} · 负责运营 {meta['op']} · 系统自动检查 Listing 基础信息、埋词和收录情况</p>")
+    top_problem="Listing 正常，可继续做埋词和收录优化"
+    top_impact="当前没有基础 Listing 阻塞，重点看漏埋词、收录变化和广告承接。"
+    top_next="按下方漏埋词清单补标题、五点、描述和后台搜索词，再观察下一轮收录。"
+    if not a["has_record"]:
+        top_problem="店铺没这条 Listing"
+        top_impact="系统查不到这条店铺 SKU，无法判断文案、后台搜索词和广告是否正常。"
+        top_next="先核对万词总表里的店铺编号和店铺 SKU，确认是否填错店铺或旧 SKU。"
+    elif not a["authored"]:
+        top_problem="本店未自建文案"
+        top_impact="这类记录无法真正埋词，后续广告和收录判断会失真。"
+        top_next="先在本店自建完整 Listing 文案，再进入埋词和广告判断。"
+    elif a["notext"]:
+        top_problem="文案全空"
+        top_impact="标题、五点、描述、后台搜索词都没有内容，关键词没有承接位置。"
+        top_next="先补标题、五点、描述和后台搜索词。"
+    elif a["be"] or a["de"] or a["se"] or not a["buy"]:
+        mp=[x for x,c in [("五点没填",a["be"]),("描述没填",a["de"]),("后台搜索词没填",a["se"]),("店铺不可售",not a["buy"])] if c]
+        top_problem="Listing需先处理："+" / ".join(mp)
+        top_impact="Listing 没准备好时，广告和收录效果都不能稳定判断。"
+        top_next="先处理这些 Listing 问题，处理完再看埋词和广告。"
+    h.append("<div class=box style='border-color:#ffb454;background:#251c12'><b>先看这个</b><table>"
+             f"<tr><th>问题</th><td>{esc(top_problem)}</td></tr>"
+             f"<tr><th>影响</th><td>{esc(top_impact)}</td></tr>"
+             f"<tr><th>谁处理</th><td>{esc(meta.get('op') or '负责运营')}</td></tr>"
+             f"<tr><th>下一步</th><td>{esc(top_next)}</td></tr>"
+             "</table></div>")
     # 完备性
-    h.append(f"<div class=box><b>📋 这次审计覆盖了什么</b><br>✅ 已审(数据驱动):埋词覆盖·收录分层·后台搜索词·机型兼容·品牌名·合规·IP联想 ｜ 🖼 需人看图:主图·A+ ｜ 📝 需运营后台看:评价星级·QA数·差评·售价 ｜ ✍ 需运营改写(本站给结构指引,主力产品才出精修稿):标题/五点/描述 prose ｜ ⚪ 没做:AI推荐池·毛利<br><span class=sub>词库 {a['total']} 词 ｜ 埋词覆盖 {a['cover_pct']}% ｜ 已收录(有自然排名){a['recorded']} 词</span></div>")
+    h.append(f"<div class=box><b>📋 这次审计覆盖了什么</b><br>✅ 已审(数据驱动):埋词覆盖·收录分层·后台搜索词·机型兼容·品牌名·合规·IP联想 ｜ 🖼 需人看图:主图·A+ ｜ 📝 需运营后台看:评价星级·QA数·差评·售价 ｜ ✍ 需运营改写(本站给结构指引,主力产品才出精修稿):标题/五点/描述文案 ｜ ⚪ 没做:AI推荐参考词·毛利<br><span class=sub>词库 {a['total']} 词 ｜ 埋词覆盖 {a['cover_pct']}% ｜ 已收录(有自然排名){a['recorded']} 词</span></div>")
     # 头号问题
     banner=[]
-    if not a["has_record"]: banner.append("🟡 该 sku 在本店无 listing 记录(纯跟卖/sku 错)→ 埋词需先自建独立 listing")
+    if not a["has_record"]: banner.append("🟡 该店铺 SKU 在本店无 Listing 记录 → 先核对店铺编号和店铺 SKU")
     elif not a["authored"]: banner.append("🟡 本店未自建文案(跟卖他人 ASIN)→ 要埋词须自建独立 listing")
     elif a["notext"]: banner.append("🔴 listing 文案全空 → 请运营核实后台是否建全")
     elif a["be"] or a["de"] or a["se"] or not a["buy"]:
@@ -1263,7 +1405,7 @@ code{{background:#1a1a20;padding:1px 5px;border-radius:3px;color:#cfcfd4;font-si
      ("评价/星级","需运营后台看评价数/星级;>4.5★ 亚马逊 AI 导购更愿推",OP),
      ("买家问答 QA","需运营后台看 QA 够不够 50 条;QA 能『借买家的嘴』提不能写进文案的词",OP),
      ("差评","需导差评,把抱怨点改进到五点和图",OP),
-     ("AI推荐池/毛利","本次没做,需单独拉","⚪ 本次没做"),
+     ("AI推荐参考词/毛利","本次没做,需单独拉","⚪ 本次没做"),
      ("listing健康+合规",
       ("🔴 标题/五点有 IP 词需改(见上)" if a["front_ip"] else
        ("🔴 后台搜索词有 IP/拼写问题需改(见上)" if a["st_ip"] else
@@ -1333,7 +1475,7 @@ code{{background:#1a1a20;padding:1px 5px;border-radius:3px;color:#cfcfd4;font-si
             v="{:,}".format(int(r["vol"])) if r["vol"] else "—"
             h.append(f"<tr><td class=kw style='color:#8b94a3'>{esc(r['kw'])}</td><td>{esc(lab)}</td><td class=num>{v}</td></tr>")
         h.append("</table>")
-    h.append("<div class=box class=sub>铁律:本报告为优化建议草稿,AI 不直接改线上 listing;标题/五点/描述的 prose 改写由运营按上方结构+补词清单操作(主力产品我们出精修稿)。上线动作经运营/Frankie 确认走领星后台。</div>")
+    h.append("<div class=box class=sub>铁律:本报告为优化建议草稿,AI 不直接改线上 Listing；标题、五点、描述文案由运营按上方结构和补词清单操作，主力产品再出精修稿。上线动作经运营/Frankie 确认走领星后台。</div>")
     h.append("</div></body></html>")
     return "".join(h)
 
@@ -1345,13 +1487,36 @@ async def review(req:Request):
     if AUTH_TOKEN and req.headers.get("authorization","")!="Bearer "+AUTH_TOKEN: return {"ok":False,"err":"unauthorized"}
     try: body=await req.json()
     except Exception: body={}
-    threading.Thread(target=do_review,kwargs={"frankie_only":bool(body.get("frankie_only")),"dry":bool(body.get("dry_run"))},daemon=True).start()
-    return {"ok":True,"msg":"review started","frankie_only":bool(body.get("frankie_only")),"dry":bool(body.get("dry_run"))}
+    run_id=uuid.uuid4().hex[:12]
+    review_run_update(run_id,status="queued",queued_at=_now_iso(),version=APP_VERSION,frankie_only=bool(body.get("frankie_only")),dry_run=bool(body.get("dry_run")))
+    threading.Thread(target=run_review,kwargs={"run_id":run_id,"frankie_only":bool(body.get("frankie_only")),"dry":bool(body.get("dry_run"))},daemon=True).start()
+    return {"ok":True,"msg":"review started","run_id":run_id,"status_url":f"/review/status?run_id={run_id}","frankie_only":bool(body.get("frankie_only")),"dry":bool(body.get("dry_run"))}
+@app.get("/review/status")
+def review_status(run_id:str=""):
+    runs=review_run_list(50)
+    if run_id:
+        for run in runs:
+            if run.get("run_id")==run_id: return {"ok":True,"run":run}
+        return {"ok":False,"err":"run_id not found","run_id":run_id}
+    return {"ok":True,"runs":runs[:20]}
 @app.get("/selftest")
 def selftest():
     try:
         n=len(lall(REG_APP,APPLY_TB)); return {"ok":True,"apply_rows":n,"lx":lx("/erp/sc/data/seller/lists",{}).get("code")}
     except Exception as e: return {"ok":False,"err":str(e)}
+@app.get("/registry/missing-config")
+def registry_missing_config(req:Request,include_all:bool=False):
+    if AUTH_TOKEN and req.headers.get("authorization","")!="Bearer "+AUTH_TOKEN: return {"ok":False,"err":"unauthorized"}
+    rows=missing_config_candidates(include_all=include_all,commit=False)
+    return {"ok":True,"count":len(rows),"rows":rows}
+@app.post("/registry/missing-config")
+async def registry_missing_config_commit(req:Request):
+    if AUTH_TOKEN and req.headers.get("authorization","")!="Bearer "+AUTH_TOKEN: return {"ok":False,"err":"unauthorized"}
+    try: body=await req.json()
+    except Exception: body={}
+    commit=bool(body.get("commit"))
+    rows=missing_config_candidates(include_all=bool(body.get("include_all")),commit=commit)
+    return {"ok":True,"commit":commit,"count":len(rows),"written":sum(1 for r in rows if r.get("已写入店铺资料")),"rows":rows}
 @app.get("/report")
 def report(asin:str, site:str):
     try:
