@@ -4,6 +4,31 @@
 
 ## 修复记录
 
+### 2026-07-17 P1：卡片闭环 + 3 天广告否词建议
+- 问题：运营如果去万词总表里手动改状态，系统无法稳定知道是谁处理、什么时候处理、处理说明是什么，也无法做到 7 天复检和 14 天升级。广告开跑后也缺少按广告组整理的否词建议闭环。
+- 改动：
+  - 新增万词问题卡片结构：卡片包含产品、站点、ASIN、负责人、店铺编号、店铺 SKU、问题类型、具体原因、下一步和 14 维报告链接。
+  - 周复审发现 Listing 需先处理、待办过期、广告没跑、最近停了时，会先写入「万词执行跟进台」；发卡默认关闭，避免未灰度就打扰运营。
+  - 新增卡片动作：`wanci_issue_done`、`wanci_issue_skip`、`wanci_issue_reassign`、`wanci_issue_help`、`wanci_negatives_confirm`、`wanci_negatives_skip`、`wanci_negatives_help`。
+  - 新增 `/wanci/card/callback`：接收亚马逊助手回调转发，回填「万词执行跟进台」，并 PATCH 原卡为“已处理，无需重复点击”。
+  - 新增 `/wanci/negatives/run`：默认 dry-run，读取「在跑 + Listing 正常 + 有店铺编号/店铺 SKU/负责人」的万词记录，按近 3 天广告搜索词生成广告组级精准否定建议。
+  - 新增否词写回保护：真实写 ERP 前必须有广告组检查接口、已存在否词检查接口、写回接口，并且 `WANCI_NEG_WRITE_ENABLED=1`；否则只 dry-run 或阻止。
+- 关键环境变量：
+  - `WANCI_TRACK_TB`：万词执行跟进台 table_id。未配置时不写表，只返回 dry-run 结果。
+  - `WANCI_NEG_TB`：万词否词建议台 table_id。未配置时不写表，只返回建议。
+  - `WANCI_CARD_APP_ID` / `WANCI_CARD_APP_SECRET`：发卡和 PATCH 原卡使用的 App，生产应配置为「亚马逊助手 App」。
+  - `WANCI_CARD_FRANKIE_ONLY`：默认 `1`，真实负责人发卡前先 Frankie-only 测试。
+  - `WANCI_ISSUE_CARD_ENABLED`：默认 `0`。设为 `1` 后，周复审会发送万词问题卡；仍受 `WANCI_CARD_FRANKIE_ONLY` 控制。
+  - `WANCI_ISSUE_CARD_LIMIT`：默认每次最多发 30 张问题卡。
+  - `WANCI_NEG_WRITE_ENABLED`：默认 `0`，不开启真实 ERP 写回。
+  - `WANCI_NEG_ADGROUP_CHECK_ENDPOINT`、`WANCI_NEG_EXISTING_ENDPOINT`、`WANCI_NEG_WRITE_ENDPOINT`：ERP 否词真实写回前必须现场确认并配置。
+  - 否词卡片只有在回调 payload 或卡片 `value` 明确带 `commit=true`，且上面写回开关和检查接口都已配置时，才会尝试真实写 ERP。
+- 接口：
+  - `POST /wanci/card/callback`：给现有亚马逊助手回调入口转发 `wanci_*` 卡片动作。
+  - `POST /wanci/negatives/run`：默认 `{"dry_run": true, "frankie_only": true}`；不会发真实运营卡，不会写 ERP。
+- 验证：本地 `C:\tmp\py311-embed\python.exe -m py_compile app.py`；`C:\tmp\py311-embed\python.exe -m unittest discover -s tests`，8 个测试通过。
+- 未做：本轮未部署、未发真实飞书卡、未写真实 ERP 否词；现有亚马逊助手回调服务所在仓库不在当前项目内，需要后续加一个 `wanci_*` 转发分支。
+
 ### 2026-07-15 P1：周复审误报和普通话术修复
 - 问题：周自检把「筹备中」「店铺不可售」「后台搜索词没填」的项目也混进广告问题里，并用「失职 / 半成品 / 催」等词，运营容易误解为自己没有处理文案或广告。
 - 根因：`do_review()` 判断广告没跑时只看库存、排名、曝光，没有先确认项目是否正式在跑、Listing 是否正常可售；`compute_audit()` 只返回「半成品」这类粗标签，没有告诉同事具体缺哪一项。
