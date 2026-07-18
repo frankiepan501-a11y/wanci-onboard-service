@@ -95,5 +95,24 @@ class ListingReportTest(unittest.TestCase):
         self.assertIn("backbone controller", ugc_terms)
 
 
+    def test_missing_buyable_status_needs_system_review_not_unavailable(self):
+        rows = [
+            {"关键词": "hall effect controller", "矩阵": "意图词", "月搜索量": 1200, "已出单单量": 0, "我方自然排名": 0},
+        ]
+        listing = self.sample_listing()
+        listing["st"] = "hall effect controller switch 2 wireless gamepad"
+        listing["status"] = ["DISCOVERABLE"]
+        listing["title_source"] = "摘要标题(summaries.itemName，可能是接口缓存/跟卖标题)"
+        audit = self.app.audit14(self.sample_meta(), listing, rows)
+        html = self.app.render14(self.sample_meta(), listing, audit)
+        weekly = self.app.compute_audit(listing, [r for r in rows], "controller")
+
+        self.assertEqual(audit["listing_availability"], "unknown")
+        self.assertIn("系统需复核：在售状态读取不一致", html)
+        self.assertIn("系统读取依据", html)
+        self.assertIn("标题核对提醒", html)
+        self.assertIn("系统需复核", weekly["status"])
+        self.assertNotIn("店铺不可售", html)
+        self.assertNotIn("店铺不可售", weekly["status"])
 if __name__ == "__main__":
     unittest.main()

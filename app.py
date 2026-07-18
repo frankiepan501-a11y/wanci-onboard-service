@@ -276,11 +276,57 @@ def load_listing(d):
     if not isinstance(bl,list): bl=[bl]
     su=info.get("summaries",[{}]); su0=su[0] if su else {}
     authored=bool(s1(g("item_name")) or g("bullet_point") or g("product_description"))  # 我方是否自建文案(非跟卖/offer-only)
-    title=s1(g("item_name")) or (su0.get("itemName") or "")  # 标题兜底 summaries.itemName(跟卖记录文案只在summaries)
+    attr_title=s1(g("item_name"))
+    summary_title=su0.get("itemName") or ""
+    title=attr_title or summary_title  # 标题兜底 summaries.itemName(跟卖记录文案只在summaries)
     return {"title":title,"bullets":[b for b in bl if b],"desc":s1(g("product_description")),
             "st":s1(g("generic_keyword")),"status":su0.get("status",[]),
-            "authored":authored,"has_record":bool(d.get("data"))}
+            "authored":authored,"has_record":bool(d.get("data")),
+            "title_source":("本店可编辑标题(attributes.item_name)" if attr_title else ("摘要标题(summaries.itemName，可能是接口缓存/跟卖标题)" if summary_title else "接口未返回标题")),
+            "status_source":"摘要状态(summaries.status)"}
 
+def listing_status_values(raw):
+    vals=[]
+    def add(v):
+        if v is None: return
+        if isinstance(v,dict):
+            for k in ("value","name","status","code"):
+                if v.get(k) is not None:
+                    add(v.get(k)); return
+            vals.append(str(v)); return
+        if isinstance(v,(list,tuple,set)):
+            for x in v: add(x)
+            return
+        s=str(v).strip()
+        if s: vals.append(s)
+    add(raw)
+    out=[]; seen=set()
+    for v in vals:
+        if v not in seen:
+            seen.add(v); out.append(v)
+    return out
+
+_LISTING_POSITIVE_STATUS={"BUYABLE","SALEABLE","SELLABLE","AVAILABLE","ACTIVE","在售","可售"}
+_LISTING_NEGATIVE_STATUS={"UNBUYABLE","NOT_BUYABLE","UNSALEABLE","NOT_SALEABLE","INACTIVE","SUPPRESSED","BLOCKED","CLOSED","DELETED","不可售","下架","停售","受限"}
+
+def listing_availability(L):
+    """把接口状态分成三类：明确在售、明确不可售、系统需复核。
+    重点：接口没返回 BUYABLE 只能说明状态来源不完整，不能直接等于店铺不可售。
+    """
+    vals=listing_status_values(L.get("status"))
+    raw=" / ".join(vals) if vals else "接口未返回在售状态"
+    if not L.get("has_record",True):
+        return {"state":"missing","buy":False,"label":"店铺没这条 Listing","raw":raw}
+    up={v.upper().replace(" ","_") for v in vals}
+    if up & _LISTING_POSITIVE_STATUS or any((("在售" in v) or ("可售" in v)) and "不可售" not in v for v in vals):
+        return {"state":"buyable","buy":True,"label":"接口返回在售","raw":raw}
+    if up & _LISTING_NEGATIVE_STATUS or any(x in v for v in vals for x in ("不可售","下架","停售","受限")):
+        return {"state":"unavailable","buy":False,"label":"店铺不可售","raw":raw}
+    return {"state":"unknown","buy":None,"label":"系统需复核：在售状态读取不一致","raw":raw}
+
+def is_system_review_status(status):
+    s=ss(status)
+    return "系统需复核" in s or "在售状态需系统复核" in s
 # 列位 & 报表解析 (与 import_seller_sprite 一致)
 REV={"kw":0,"nat":9,"ad":12,"vol":16,"spr":17,"buy":20,"demand":24,"ppc":28,"top10":30}
 MIN={"kw":0,"vol":6,"buy":8,"spr":11,"demand":14,"ppc":18,"top10":33}
@@ -532,7 +578,7 @@ def make_html(product,site,asin,store,L,rows,cat):
     nz=sorted(noise,key=lambda r:-r["vol"])
     softw=sorted([r for r in R if soft_platform_hit(r["kw"]) and not is_hard_platform(r["kw"]) and not is_ip(r["kw"]) and not is_comp(r["kw"])],key=lambda r:-r["vol"])
     soft_hint=("" if (soft or not softw) else f"<div class=\"callout c-yel\"><strong style=\"color:var(--yel)\">💡 多平台机会（{len(softw)} 个 PC/手机词暂被剔）</strong>：本品 listing 未声明 PC/手机支持，故按别平台剔除。若产品实际支持 PC/Android（多数 Switch 手柄支持），listing 补一句「Compatible with PC / Android / iOS」即可解锁这些词进埋词+广告。Top：{' / '.join(esc(r['kw']) for r in softw[:8])}</div>")
-    be=len(L["bullets"])==0; de=not L["desc"].strip(); se=not L["st"].strip(); buy="BUYABLE" in (L["status"] or [])
+    avail=listing_availability(L); be=len(L["bullets"])==0; de=not L["desc"].strip(); se=not L["st"].strip(); buy=avail["buy"] is True; sale_unavailable=avail["state"]=="unavailable"; sale_unknown=avail["state"]=="unknown"
     notext=(not L["title"].strip()) and be and de and se
     rkp=round(100.0*len(rk)/max(total,1)); ep=round(100.0*embedded/max(total,1))
     def trow(r):
@@ -548,9 +594,12 @@ def make_html(product,site,asin,store,L,rows,cat):
         hb=f"""<div class="callout c-yel"><h2 style="margin-top:0">🟡 跟卖 / 未自建文案</h2><ul><li>本店只挂 offer 匹配到已有 ASIN，标题《{esc(L['title'][:60])}》来自<strong>被跟卖 listing</strong>，我方<strong>未自建五点/描述/后台搜索词</strong>（attributes 无 item_name/bullet_point）。</li><li>→ 无法埋词；要埋词须<strong>自建独立 listing</strong>（或在拥有该 listing 文案的店铺操作）。非领星同步问题。</li></ul></div>"""
     elif notext:
         hb=f"""<div class="callout c-red"><h2 style="margin-top:0">🔴 Listing 文案全空（标题/五点/描述/后台搜索词）</h2><ul><li>状态 <strong>{esc('/'.join(L['status']) or '未知')}</strong>。请运营核实后台 listing 是否建全。下方「已收录」仍有效。</li></ul></div>"""
-    elif be or de or se or not buy:
-        mp=[x for x,c in [("五点没填",be),("描述没填",de),("后台搜索词没填",se),("店铺不可售",not buy)] if c]
-        hb=f"""<div class="callout c-red"><h2 style="margin-top:0">🔴 头号问题：Listing 需先处理</h2><ul><li><strong>{esc(' / '.join(mp))}</strong></li><li>先把这些问题处理好，再看埋词和广告。</li></ul></div>"""
+    elif be or de or se or sale_unavailable or sale_unknown:
+        mp=[x for x,c in [("五点没填",be),("描述没填",de),("后台搜索词没填",se),("店铺不可售",sale_unavailable),("在售状态需系统复核",sale_unknown)] if c]
+        if sale_unknown and not (be or de or se or sale_unavailable):
+            hb=f"""<div class="callout c-yel"><h2 style="margin-top:0">🟡 系统需复核：在售状态读取不一致</h2><ul><li>系统没有读到明确的在售状态，但这不能直接等于不可售问题。</li><li>如果运营后台显示在售，请先以后台为准；系统核对店铺编号、店铺里的 SKU、ASIN 和接口读取来源。</li></ul></div>"""
+        else:
+            hb=f"""<div class="callout c-red"><h2 style="margin-top:0">🔴 头号问题：Listing 需先处理</h2><ul><li><strong>{esc(' / '.join(mp))}</strong></li><li>先处理明确的 Listing 问题；在售状态不一致的部分由系统复核，不要求运营按不可售处理。</li></ul></div>"""
     else: hb=""
     return f"""<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>{esc(product)} · {esc(site)} 埋词审计</title>
 <style>:root{{--bg:#0f1115;--card:#171a21;--line:#262b36;--txt:#e6e9ef;--mut:#9aa3b2;--red:#ff5c66;--redbg:#2a161a;--grn:#28d6a3;--yel:#ffc24b;--yelbg:#2a2310;--blu:#5ab0ff;--accent:#19E0CE}}*{{box-sizing:border-box}}body{{margin:0;background:var(--bg);color:var(--txt);font-family:-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;line-height:1.65}}.wrap{{max-width:900px;margin:0 auto;padding:40px 24px 80px}}header{{border-bottom:1px solid var(--line);padding-bottom:22px;margin-bottom:26px}}.kicker{{color:var(--accent);font-size:13px;letter-spacing:2px;font-weight:600}}h1{{font-size:27px;margin:8px 0 6px}}.meta{{color:var(--mut);font-size:13px;font-family:Consolas,monospace}}h2{{font-size:19px;margin:30px 0 12px}}.card{{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px 22px;margin:12px 0}}.callout{{border-left:4px solid var(--red);background:var(--redbg);border-radius:10px;padding:16px 20px;margin:14px 0}}.callout h2{{color:var(--red)}}.c-yel{{background:var(--yelbg);border-color:var(--yel)}}.stat-row{{display:flex;gap:12px;flex-wrap:wrap;margin:12px 0}}.stat{{flex:1;min-width:150px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:15px}}.stat .n{{font-size:30px;font-weight:700;color:var(--accent)}}.stat .l{{color:var(--mut);font-size:12.5px;margin-top:2px}}.tier{{display:flex;gap:10px;margin-top:10px}}.tierbox{{flex:1;text-align:center;background:#1b1f27;border-radius:9px;padding:9px 4px}}.tierbox .tn{{font-size:20px;font-weight:700}}.tierbox .tl{{font-size:11px;color:var(--mut)}}.t-good .tn{{color:var(--grn)}}.t-mid .tn{{color:var(--yel)}}.t-bad .tn{{color:var(--red)}}table{{width:100%;border-collapse:collapse;margin-top:10px;font-size:14px}}th{{text-align:left;color:var(--mut);border-bottom:1px solid var(--line);padding:8px 10px;font-size:12px}}td{{padding:8px 10px;border-bottom:1px solid #1d2129}}.kw{{font-family:Consolas,monospace;color:#dfe6ee}}.num{{text-align:right;color:var(--accent);font-weight:600}}.dash{{color:#4a5160}}.tag{{display:inline-block;font-size:11px;padding:2px 8px;border-radius:20px;background:#22303a;color:var(--blu)}}.tag.p{{background:#2c2433;color:#c79bff}}.tag.n{{background:#2a2014;color:#caa46a}}.foot{{color:var(--mut);font-size:12.5px;border-top:1px dashed var(--line);margin-top:28px;padding-top:14px}}ol li,ul li{{margin:8px 0}}</style></head><body><div class="wrap">
@@ -558,7 +607,7 @@ def make_html(product,site,asin,store,L,rows,cat):
 {hb}
 <h2>📊 三个关键数（别混）</h2><div class="stat-row"><div class="stat"><div class="n">{total}</div><div class="l">候选池(词库总词)<br>含待校验噪音</div></div><div class="stat"><div class="n">{len(rk)}</div><div class="l">✅ 已收录(有自然排名)<br>占候选 {rkp}%</div></div><div class="stat"><div class="n">{embedded}</div><div class="l">已埋(埋进文案)<br>占候选 {ep}%</div></div><div class="stat"><div class="n">{fit}</div><div class="l">合适词(剔噪后)<br>直写{len(embeddable)}+UGC{len(ugc)}</div></div></div>
 <h2>🎯 已收录 {len(rk)} 词 · 收录质量分层</h2><div class="card"><div class="tier"><div class="tierbox t-good"><div class="tn">{len(p1)}</div><div class="tl">首页(≤16名)</div></div><div class="tierbox t-mid"><div class="tn">{len(p23)}</div><div class="tl">2-3页(17-48)</div></div><div class="tierbox t-bad"><div class="tn">{len(deep)}</div><div class="tl">靠后(&gt;48)</div></div></div><div style="color:var(--mut);font-size:13px;margin-top:10px">收录≠首页：{len(rk)} 个有排名里只 {len(p1)} 个首页，{len(deep)} 个在第3页后。万词要把它们往首页推 + 把合适漏埋词推进收录。</div></div>
-<h2>✅ 改进意见</h2><div class="card"><ol><li><strong>{'先补全文案+上架可售' if (be or de or se or not buy) else '补齐缺失埋词层'}</strong>：空层补全(可本地化美国站文案),确认店铺已可售。</li><li><strong>后台搜索词先填</strong>：最容易补,先放高价值漏埋词。</li><li><strong>敏感词走UGC</strong>：nintendo 描述里 compatible with 埋1处;IP/竞品靠 Review/QA。</li><li><strong>机型兼容词可直写</strong>(本品支持的机型)。</li></ol></div>
+<h2>✅ 改进意见</h2><div class="card"><ol><li><strong>{'先补全文案+上架可售' if (be or de or se or sale_unavailable) else '补齐缺失埋词层'}</strong>：空层补全(可本地化美国站文案),确认店铺已可售。</li><li><strong>后台搜索词先填</strong>：最容易补,先放高价值漏埋词。</li><li><strong>敏感词走UGC</strong>：nintendo 描述里 compatible with 埋1处;IP/竞品靠 Review/QA。</li><li><strong>机型兼容词可直写</strong>(本品支持的机型)。</li></ol></div>
 <h2>📌 高价值漏埋词根 Top20 · 可直写补埋</h2><div style="color:var(--mut);font-size:13px">已按<b>差异化词根聚合</b>(switch/switch 2/nintendo 等机型变体合并,只提示真正缺的卖点词根,不堆词);商标/竞品/IP/游戏/别平台/拼写变体已排除。月搜量为同根累加。</div>
 <table><thead><tr><th>关键词</th><th>矩阵</th><th class="num">月搜量</th><th class="num">已出单</th></tr></thead><tbody>{miss_h}</tbody></table>
 <div class="callout c-yel"><strong style="color:var(--yel)">⚠️ 走 UGC 不直写的敏感词</strong>(漏埋但靠 Review/QA 收录,别塞ST/五点)<ul style="margin-bottom:0">{ugc_h}</ul></div>
@@ -947,7 +996,7 @@ def compute_audit(L,rows,cat):
     sens=lambda r: r["mx"] in ("IP词","品牌词-竞品") or is_ip(r["kw"]) or is_comp(r["kw"]) or is_trademark(r["kw"])
     ugc=[r for r in R if sens(r)]; embeddable=[r for r in R if r["qual"] and not sens(r)]
     miss=agg_roots(sorted([r for r in embeddable if not(r["front"] or r["instr"])],key=lambda r:-(r["vol"]+r["ord"]*5000)))
-    be=len(L["bullets"])==0; de=not L["desc"].strip(); se=not L["st"].strip(); buy="BUYABLE" in (L["status"] or [])
+    avail=listing_availability(L); be=len(L["bullets"])==0; de=not L["desc"].strip(); se=not L["st"].strip(); buy=avail["buy"] is True; sale_unavailable=avail["state"]=="unavailable"; sale_unknown=avail["state"]=="unknown"
     notext=(not L["title"].strip()) and be and de and se
     if not L.get("has_record", True):
         status="店铺没这条Listing"
@@ -956,11 +1005,15 @@ def compute_audit(L,rows,cat):
     elif notext:
         status="文案全空"
     else:
-        issues=[x for x,c in [("五点没填",be),("描述没填",de),("后台搜索词没填",se),("店铺不可售",not buy)] if c]
-        status="、".join(issues) if issues else "正常"
+        issues=[x for x,c in [("五点没填",be),("描述没填",de),("后台搜索词没填",se),("店铺不可售",sale_unavailable),("在售状态需系统复核",sale_unknown)] if c]
+        if sale_unknown and not (be or de or se or sale_unavailable):
+            status="系统需复核：在售状态读取不一致"
+        else:
+            status="、".join(issues) if issues else "正常"
     return {"total":total,"recorded":len(rk),"p1":len(p1),"p23":len(p23),"deep":len(deep),"embedded":embedded,
             "cover_pct":round(100.0*embedded/max(total,1)),"fit":len(embeddable)+len(ugc),
-            "miss":[{"kw":r["kw"],"vol":r["vol"],"ord":r["ord"]} for r in miss[:5]],"status":status}
+            "miss":[{"kw":r["kw"],"vol":r["vol"],"ord":r["ord"]} for r in miss[:5]],"status":status,
+            "listing_availability":avail["state"],"listing_status_raw":avail["raw"]}
 
 def refresh_t2(app,t1,t2,L,cat,site):
     """只刷表2(Listing埋词审计),保持与最新 listing 文案同步(摘自 fill_234 表2 段)。"""
@@ -1365,8 +1418,12 @@ def review_result_issues(it,plan_record_id="",sid="",sku=""):
             "事项键":f"WanciIssue:{it.get('asin')}:{it.get('site')}:{kind}"})
         out.append(x)
     m=it.get("m") or {}
-    if m.get("status") and m.get("status")!="正常":
-        add("Listing 需先处理",m.get("status"),"先处理 Listing 问题；后台搜索词没填就补后台搜索词，店铺不可售就先处理可售状态。")
+    st=m.get("status") or ""
+    if st and st!="正常":
+        if is_system_review_status(st):
+            add("系统需复核",st,"系统先核对店铺编号、店铺里的 SKU、ASIN、标题来源和在售状态来源；运营暂时不用改 Listing。")
+        else:
+            add("Listing 需先处理",st,"先处理明确的 Listing 问题：后台搜索词没填就补后台搜索词；五点没填就补五点；描述没填就补描述；店铺没这条 Listing 就先核对店铺编号和店铺里的 SKU。")
     if it.get("overdue"):
         add("待办过期"," / ".join(it.get("todo") or []),"按上面问题逐项处理；处理后点卡片按钮，系统下轮复检。")
     if it.get("derelict"):
@@ -1563,8 +1620,9 @@ def run_negative_review(dry=True,send_cards=False,frankie_only=True,limit=50):
         if not snap:
             skipped.append({"plan":plan,"reason":"没有复审快照，不能确认 Listing 是否正常"})
             continue
-        if ss(snap.get("listing状态"))!="正常":
-            skipped.append({"plan":plan,"reason":"Listing 需先处理，不生成广告否词卡"})
+        listing_status=ss(snap.get("listing状态"))
+        if listing_status!="正常":
+            skipped.append({"plan":plan,"reason":("系统需复核，不生成广告否词卡" if is_system_review_status(listing_status) else "Listing 需先处理，不生成广告否词卡")})
             continue
         checked+=1
         cands=fetch_negative_candidates_for_plan(plan)
@@ -1674,7 +1732,7 @@ def do_review(frankie_only=False,dry=False,run_id=None):
             instock=isinstance(fba,(int,float)) and fba>=10; ranked=isinstance(bsr,(int,float)) and bsr>0
             serving=impr2>0; ran7=impr7>0  # 报表驱动(可靠):近2天有曝光=当前在投 / 近7天投过
             # 只有正式在跑、且 Listing 已正常可售，才判断广告是否该投。
-            # 筹备中、店铺不可售、文案没填全的项目先处理 Listing/资料，不直接归因到运营广告动作。
+            # 筹备中、明确不可售、文案没填全的项目先处理 Listing/资料；状态来源不一致先系统复核，不直接归因到广告动作。
             ad_ready=(status=="在跑" and m["status"]=="正常")
             derelict=ad_ready and instock and ranked and not ran7
             paused_recent=ad_ready and instock and ranked and ran7 and not serving
@@ -1700,7 +1758,8 @@ def do_review(frankie_only=False,dry=False,run_id=None):
             fs=first.get((asin,site)); base_ts=fs[0] if fs else now
             base_cov=_pn(fs[1].get("埋词覆盖率")) if fs else m["cover_pct"]
             days_since=int((now-base_ts)/86400000); todo=[]
-            if m["status"]!="正常": todo.append(f"Listing需先处理({m['status']})")
+            if m["status"]!="正常":
+                todo.append(f"系统需复核({m['status']})" if is_system_review_status(m["status"]) else f"Listing需先处理({m['status']})")
             else:
                 if m["cover_pct"]<=base_cov and m["miss"]: todo.append(f"埋词{days_since}天没提升(还{len(m['miss'])}个高价值漏埋没补)")
                 if len(L["bullets"])<5: todo.append(f"五点仅{len(L['bullets'])}条<5")
@@ -1751,7 +1810,9 @@ def do_review(frankie_only=False,dry=False,run_id=None):
                 m=it["m"]; tag="" if it["first"] else f" (覆盖{_arrow(it['d_cov'])} 收录{_arrow(it['d_rec'])} 首页{_arrow(it['d_p1'])})"
                 lines.append(f"**{it['product']} {it['site']}** · 埋词覆盖 {m['cover_pct']}% · 已收录 {m['recorded']}(首页{m['p1']}) · 合适词 {m['fit']}{tag}")
                 lines.append(f"  🔗 [查看14维深度报告]({REPORT_BASE}/report?asin={it['asin']}&site={it['site']})")
-                if m["status"]!="正常": lines.append(f"  🔴 Listing需先处理：**{m['status']}** → 先处理这个，再看埋词和广告")
+                if m["status"]!="正常":
+                    if is_system_review_status(m["status"]): lines.append(f"  🟡 系统需复核：**{m['status']}** → 运营暂时不用改 Listing，先由系统核对店铺编号、店铺里的 SKU、ASIN 和数据来源")
+                    else: lines.append(f"  🔴 Listing需先处理：**{m['status']}** → 先处理明确的 Listing 问题，再看埋词和广告")
                 elif not it["haverank"]: lines.append("  ⚪ 收录追踪未铺开(以埋词覆盖率为准)")
                 if m["miss"]: lines.append("  📌 漏埋高价值: "+" / ".join(x["kw"] for x in m["miss"][:4]))
                 if not it["first"] and it["d_cov"]<0: lines.append("  ⚠️ 埋词覆盖**退步**,核对是否改 listing 改丢了词")
@@ -1770,7 +1831,16 @@ def do_review(frankie_only=False,dry=False,run_id=None):
         improved=[x for x in allr if not x["first"] and (x["d_cov"]>0 or x["d_rec"]>0)]
         stuck=[x for x in allr if x["m"]["status"]!="正常" or (not x["first"] and x["d_cov"]<0)]
         L1=[f"✅ {x['product']} {x['site']}: 覆盖{_arrow(x['d_cov'])} 收录{_arrow(x['d_rec'])}" for x in improved] or ["（本周无明显改善）"]
-        L2=[f"🔴 {x['product']} {x['site']}: "+(f"Listing需先处理：{x['m']['status']}" if x['m']['status']!='正常' else f"埋词覆盖退步{_arrow(x['d_cov'])}")+f" — 负责人 {x['op']}" for x in stuck] or ["（无卡住）"]
+        L2=[]
+        for x in stuck:
+            if x["m"]["status"]!="正常":
+                if is_system_review_status(x["m"]["status"]):
+                    L2.append(f"🟡 {x['product']} {x['site']}: 系统需复核：{x['m']['status']} — 负责人 {x['op']}")
+                else:
+                    L2.append(f"🔴 {x['product']} {x['site']}: Listing需先处理：{x['m']['status']} — 负责人 {x['op']}")
+            else:
+                L2.append(f"🔴 {x['product']} {x['site']}: 埋词覆盖退步{_arrow(x['d_cov'])} — 负责人 {x['op']}")
+        if not L2: L2=["（无卡住）"]
         derel=[x for x in allr if x.get("derelict")]; budg=[x for x in allr if x.get("paused_recent")]
         L4=[f"🔴 {x['product']} {x['site']}: 可售+FBA{x['fba']}+BSR#{x['bsr']}，但近7天0广告曝光 — 负责人 {x['op']}" for x in derel] or ["（无）"]
         L5=[f"🟠 {x['product']} {x['site']}: 最近停了 — {x['budget_advice']}（负责人 {x['op']}）" for x in budg] or ["（无）"]
@@ -1781,9 +1851,9 @@ def do_review(frankie_only=False,dry=False,run_id=None):
             f"**🔴 广告没跑·可售有库存有排名但近7天0曝光 {len(derel)}**\n"+"\n".join(L4)
             +f"\n\n**🟠 最近停了·近2天0曝光(查预算/是否误停) {len(budg)}**\n"+"\n".join(L5)
             +f"\n\n**⏰ 待办过期·过{GUIDANCE_DAYS}天还没处理 {len(overdue_list)}**\n"+"\n".join(L6)
-            +f"\n\n**📈 埋词改善 {len(improved)}**\n"+"\n".join(L1)+f"\n\n**🚨 Listing需先处理 {len(stuck)}**\n"+"\n".join(L2)
+            +f"\n\n**📈 埋词改善 {len(improved)}**\n"+"\n".join(L1)+f"\n\n**🚨 Listing需先处理 / 系统需复核 {len(stuck)}**\n"+"\n".join(L2)
             +(f"\n\n**⚠️ 异常 {len(errors)}**: "+" / ".join(errors[:8]) if errors else "")
-            +f"\n\n> 广告提醒只看正式在跑且 Listing 正常可售的项目。筹备中、不可售、后台搜索词没填、文案没填全的项目，会先归到 Listing 处理，不会直接算广告问题。")
+            +f"\n\n> 广告提醒只看正式在跑且 Listing 正常可售的项目。筹备中、明确不可售、后台搜索词没填、文案没填全的项目，会先归到 Listing 处理；系统读取不一致的项目先复核，不会直接算广告问题。")
         im_card(foid,f"🟡 [AMZ·P2] 万词周自检总览 · {day}",md,"blue")
     result={"ok":True,"reviewed":sum(len(v) for v in per_op.values()),"operators":len(per_op),"snap":len(new_snap),"written":written,"issue_rows":issue_rows,"issue_cards_sent":issue_cards_sent,"errors":errors,"run_id":run_id}
     review_run_update(run_id,status="success",finished_at=_now_iso(),reviewed=result["reviewed"],operators=len(per_op),snapshots=len(new_snap),snapshot_count_written=written,issue_rows=issue_rows,issue_cards_sent=issue_cards_sent,error_count=len(errors))
@@ -1873,7 +1943,7 @@ def audit14(meta, L, rows):
     missu=sorted([r for r in ugc if not(r["front"] or r["instr"])],key=lambda r:-(r["vol"]+r["ord"]*5000))
     nz=sorted(noise,key=lambda r:-r["vol"])
     # listing 健康
-    be=len(L["bullets"])==0; de=not L["desc"].strip(); se=not L["st"].strip(); buy="BUYABLE" in (L["status"] or [])
+    avail=listing_availability(L); be=len(L["bullets"])==0; de=not L["desc"].strip(); se=not L["st"].strip(); buy=avail["buy"] is True; sale_unavailable=avail["state"]=="unavailable"; sale_unknown=avail["state"]=="unknown"
     notext=(not L["title"].strip()) and be and de and se
     nbul=len(L["bullets"])
     # R2/R6 标题结构检查
@@ -1938,7 +2008,7 @@ def audit14(meta, L, rows):
         cover_pct=round(100.0*embedded/max(total,1)),rec_pct=round(100.0*len(rk)/max(total,1)),
         fit=fit,n_embeddable=len(embeddable),n_ugc=len(ugc),
         miss=miss[:20],missu=missu[:12],noise=nz[:15],supp=supp,soft=soft,
-        nbul=nbul,be=be,de=de,se=se,buy=buy,notext=notext,authored=L.get("authored",True),has_record=L.get("has_record",True),
+        nbul=nbul,be=be,de=de,se=se,buy=buy,sale_unavailable=sale_unavailable,sale_unknown=sale_unknown,listing_availability=avail["state"],availability_label=avail["label"],listing_status_raw=avail["raw"],title_source=L.get("title_source","接口未返回标题"),status_source=L.get("status_source","摘要状态(summaries.status)"),notext=notext,authored=L.get("authored",True),has_record=L.get("has_record",True),
         miss_title=miss_title,has_scene=has_scene,has_pain=has_pain,has_after=has_after,
         st_ip=st_ip,st_mis=st_mis,st_sug=sug,st_sug_bytes=by(sug),ip_lib=ip_lib,
         front_ip=front_ip,front_tm=front_tm,front_comp=front_comp,core_cov=core_cov,core_gap=core_gap)
@@ -1981,17 +2051,32 @@ code{{background:#1a1a20;padding:1px 5px;border-radius:3px;color:#cfcfd4;font-si
         top_problem="文案全空"
         top_impact="标题、五点、描述、后台搜索词都没有内容，关键词没有承接位置。"
         top_next="先补标题、五点、描述和后台搜索词。"
-    elif a["be"] or a["de"] or a["se"] or not a["buy"]:
-        mp=[x for x,c in [("五点没填",a["be"]),("描述没填",a["de"]),("后台搜索词没填",a["se"]),("店铺不可售",not a["buy"])] if c]
-        top_problem="Listing需先处理："+" / ".join(mp)
-        top_impact="Listing 没准备好时，广告和收录效果都不能稳定判断。"
-        top_next="先处理这些 Listing 问题，处理完再看埋词和广告。"
+    elif a["be"] or a["de"] or a["se"] or a.get("sale_unavailable") or a.get("sale_unknown"):
+        mp=[x for x,c in [("五点没填",a["be"]),("描述没填",a["de"]),("后台搜索词没填",a["se"]),("店铺不可售",a.get("sale_unavailable")),("在售状态需系统复核",a.get("sale_unknown"))] if c]
+        if a.get("sale_unknown") and not (a["be"] or a["de"] or a["se"] or a.get("sale_unavailable")):
+            top_problem="系统需复核：在售状态读取不一致"
+            top_impact="运营后台可能显示在售，但系统接口没有返回明确在售状态；这时不能直接判成不可售问题。"
+            top_next="运营暂时不用按不可售处理；系统先核对店铺编号、店铺里的 SKU、ASIN、标题来源和状态来源。"
+        else:
+            top_problem="Listing需先处理："+" / ".join(mp)
+            top_impact="明确的 Listing 问题会影响广告和收录判断；在售状态不一致的部分先由系统复核。"
+            top_next="先处理后台搜索词/五点/描述等明确问题；如果只是状态不一致，运营先不用改 Listing。"
+    top_owner="系统" if (a.get("sale_unknown") and not (a["be"] or a["de"] or a["se"] or a.get("sale_unavailable"))) else (meta.get("op") or "负责运营")
     h.append("<div class=box style='border-color:#ffb454;background:#251c12'><b>先看这个</b><table>"
              f"<tr><th>问题</th><td>{esc(top_problem)}</td></tr>"
              f"<tr><th>影响</th><td>{esc(top_impact)}</td></tr>"
-             f"<tr><th>谁处理</th><td>{esc(meta.get('op') or '负责运营')}</td></tr>"
+             f"<tr><th>谁处理</th><td>{esc(top_owner)}</td></tr>"
              f"<tr><th>下一步</th><td>{esc(top_next)}</td></tr>"
              "</table></div>")
+    h.append("<div class=box><b>系统读取依据</b><table>"
+             f"<tr><th>店铺编号</th><td>{esc(meta.get('sid',''))}</td></tr>"
+             f"<tr><th>店铺里的 SKU</th><td>{esc(meta.get('sku',''))}</td></tr>"
+             f"<tr><th>ASIN</th><td>{esc(meta.get('asin',''))}</td></tr>"
+             f"<tr><th>系统读到的在售状态</th><td>{esc(a.get('listing_status_raw') or '接口未返回')}</td></tr>"
+             f"<tr><th>系统结论</th><td>{esc(a.get('availability_label') or '')}</td></tr>"
+             f"<tr><th>标题来源</th><td>{esc(a.get('title_source') or '')}</td></tr>"
+             f"<tr><th>系统读到的标题</th><td>{esc(L.get('title') or '')}</td></tr>"
+             "</table><div class=sub>如果运营后台截图显示在售或标题已更新，但这里不同，以后台截图为准；这类先标为系统需复核，不要求运营先改 Listing。</div></div>")
     # 完备性
     h.append(f"<div class=box><b>📋 这次审计覆盖了什么</b><br>✅ 已审(数据驱动):埋词覆盖·收录分层·后台搜索词·机型兼容·品牌名·合规·IP联想 ｜ 🖼 需人看图:主图·A+ ｜ 📝 需运营后台看:评价星级·QA数·差评·售价 ｜ ✍ 需运营改写(本站给结构指引,主力产品才出精修稿):标题/五点/描述文案 ｜ ⚪ 没做:AI推荐参考词·毛利<br><span class=sub>词库 {a['total']} 词 ｜ 埋词覆盖 {a['cover_pct']}% ｜ 已收录(有自然排名){a['recorded']} 词</span></div>")
     # 头号问题
@@ -1999,9 +2084,12 @@ code{{background:#1a1a20;padding:1px 5px;border-radius:3px;color:#cfcfd4;font-si
     if not a["has_record"]: banner.append("🟡 该店铺 SKU 在本店无 Listing 记录 → 先核对店铺编号和店铺 SKU")
     elif not a["authored"]: banner.append("🟡 本店未自建文案(跟卖他人 ASIN)→ 要埋词须自建独立 listing")
     elif a["notext"]: banner.append("🔴 listing 文案全空 → 请运营核实后台是否建全")
-    elif a["be"] or a["de"] or a["se"] or not a["buy"]:
-        mp=[x for x,c in [("五点没填",a["be"]),("描述没填",a["de"]),("后台搜索词没填",a["se"]),("店铺不可售",not a["buy"])] if c]
-        banner.append("🔴 Listing需先处理："+" / ".join(mp)+" → 先处理这个，再看埋词和广告")
+    elif a["be"] or a["de"] or a["se"] or a.get("sale_unavailable") or a.get("sale_unknown"):
+        mp=[x for x,c in [("五点没填",a["be"]),("描述没填",a["de"]),("后台搜索词没填",a["se"]),("店铺不可售",a.get("sale_unavailable")),("在售状态需系统复核",a.get("sale_unknown"))] if c]
+        if a.get("sale_unknown") and not (a["be"] or a["de"] or a["se"] or a.get("sale_unavailable")):
+            banner.append("🟡 系统需复核：在售状态读取不一致 → 运营后台如显示在售，先不用改 Listing，系统核对店铺编号/店铺里的 SKU/ASIN/数据来源")
+        else:
+            banner.append("🔴 Listing需先处理："+" / ".join(mp)+" → 先处理明确的 Listing 问题；在售状态不一致的部分由系统复核")
     if a["front_ip"]: banner.append(f"🔴 标题/五点里有 IP/疑似IP词 <code class=red>{esc(', '.join(a['front_ip']))}</code> 写在前台 → 侵权风险最高,建议改成描述性词或移走(IP 联想只走买家 Review/QA)")
     if a["st_ip"]: banner.append(f"🔴 后台搜索词里有 IP/疑似IP词 <code class=red>{esc(', '.join(a['st_ip']))}</code> 写在线上 → 侵权风险,建议尽快删(IP 联想只走买家 Review/QA)")
     if a["st_mis"]: banner.append(f"🟠 后台搜索词有拼写错词 <code class=warn>{esc(', '.join(set(a['st_mis'])))}</code> → 删或改正")
@@ -2017,6 +2105,26 @@ code{{background:#1a1a20;padding:1px 5px;border-radius:3px;color:#cfcfd4;font-si
     # 14维诊断
     GN="<span class=grn>✅ 没问题</span>"; CH="<span class=new>✅ 已诊断</span>"; HU="🖼 需人看图"; OP="📝 需运营补"; RW="✍ 需运营改写"
     miss_t=("、".join(a["miss_title"]) if a["miss_title"] else "")
+    listing_health_text="状态可售,合规无裸写品牌/IP"
+    listing_health_state=GN
+    if a.get("sale_unknown"):
+        listing_health_text="🟡 系统需复核：在售状态读取不一致，不要求运营先改 Listing"
+        listing_health_state="🟡 系统复核"
+    elif a["front_ip"]:
+        listing_health_text="🔴 标题/五点有 IP 词需改(见上)"
+        listing_health_state="🔴 需改"
+    elif a["st_ip"]:
+        listing_health_text="🔴 后台搜索词有 IP/拼写问题需改(见上)"
+        listing_health_state="🔴 需改"
+    elif a['be'] or a['de'] or a['se'] or a.get('sale_unavailable') or not a['authored'] or not a['has_record']:
+        listing_health_text="🔴 Listing需先处理，原因见上"
+        listing_health_state="🔴 需改"
+    elif a["front_tm"]:
+        listing_health_text="🟠 标题/五点含 nintendo 商标 → 兼容措辞 for/compatible 可,裸写品牌名建议改 for Switch 2"
+        listing_health_state="🟠 可优化"
+    elif a["front_comp"]:
+        listing_health_text="🟠 标题/五点含竞品品牌 → 建议移走(走 SD 商品定投打竞品)"
+        listing_health_state="🟠 可优化"
     diag=[
      ("埋词覆盖",f"{a['embedded']} 个目标词已进文案(覆盖 {a['cover_pct']}%);下方『漏埋补词清单』是剔噪后可直写补的高价值词",CH),
      ("标题关键词顺序",(f"标题缺:<b class=warn>{esc(miss_t)}</b> → 建议结构见下『标题诊断』" if miss_t else "标题已含品牌+核心词+机型,顺序合理"),(RW if miss_t else GN)),
@@ -2033,20 +2141,16 @@ code{{background:#1a1a20;padding:1px 5px;border-radius:3px;color:#cfcfd4;font-si
      ("买家问答 QA","需运营后台看 QA 够不够 50 条;QA 能『借买家的嘴』提不能写进文案的词",OP),
      ("差评","需导差评,把抱怨点改进到五点和图",OP),
      ("AI推荐参考词/毛利","本次没做,需单独拉","⚪ 本次没做"),
-     ("listing健康+合规",
-      ("🔴 标题/五点有 IP 词需改(见上)" if a["front_ip"] else
-       ("🔴 后台搜索词有 IP/拼写问题需改(见上)" if a["st_ip"] else
-        ("🔴 Listing需先处理，原因见上" if (a['be'] or a['de'] or a['se'] or not a['buy'] or not a['authored'] or not a['has_record']) else
-         ("🟠 标题/五点含 nintendo 商标 → 兼容措辞 for/compatible 可,裸写品牌名建议改 for Switch 2" if a["front_tm"] else
-          ("🟠 标题/五点含竞品品牌 → 建议移走(走 SD 商品定投打竞品)" if a["front_comp"] else "状态可售,合规无裸写品牌/IP"))))),
-      ("🔴 需改" if (a['front_ip'] or a['st_ip'] or a['be'] or a['de'] or a['se'] or not a['buy'] or not a['authored'] or not a['has_record']) else ("🟠 可优化" if (a['front_tm'] or a['front_comp']) else GN))),
+     ("listing健康+合规",listing_health_text,listing_health_state),
     ]
     h.append("<h2>🩺 14 维诊断</h2><table><tr><th>维度</th><th>诊断</th><th>状态</th></tr>")
     for d,t,s in diag: h.append(f"<tr><td><b>{esc(d)}</b></td><td>{t}</td><td>{s}</td></tr>")
     h.append("</table>")
     # 标题诊断
     h.append("<h2>① 标题诊断（结构指引，运营改写）</h2>")
-    h.append(f"<div class=box><span class=old>现标题：</span><br>{esc(L['title'])}</div>")
+    h.append(f"<div class=box><span class=old>系统读到的标题（来源：{esc(a.get('title_source') or '')}）：</span><br>{esc(L['title'])}</div>")
+    if a.get("sale_unknown") or "summaries.itemName" in (a.get("title_source") or ""):
+        h.append("<div class=box style='border-color:#ffb454;background:#251c12'><b class=warn>标题核对提醒</b><br>如果运营后台已改标题或后台显示在售，但这里不同，以后台截图为准；本报告只是系统当前读到的数据，先由系统复核，不要求运营按这条标题直接改。</div>")
     if a["miss_title"]:
         seg3=("卖点+灯效官方术语" if any("Hidden Glow" in m for m in a["miss_title"]) else "卖点")
         h.append(f"<div class=box><span class=new>建议补：</span> <b class=warn>{esc('、'.join(a['miss_title']))}</b><br><span class=sub>推荐结构:段1(权重最高) 核心词+机型(本周主攻长尾词放这,达标后轮换) ｜ 段2 品牌+系列英文名+型号(查产品库该品牌型号) ｜ 段3 {seg3}。Capitalize Every Word。</span></div>")
