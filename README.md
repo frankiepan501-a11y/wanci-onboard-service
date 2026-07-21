@@ -3,6 +3,19 @@
 密钥全走 env: FEISHU_APP_ID/FEISHU_APP_SECRET/LX_PROXY_TOKEN/ONBOARD_TOKEN。
 
 ## 修复记录
+### 2026-07-21 P1：DE 站误读 UK 店铺 Listing
+- 问题：运营反馈 DE 站两个报告显示“Listing需先处理：店铺不可售”，但亚马逊后台截图显示同一 ASIN 和店铺里的 SKU 实际在售，标题也和报告不一致。
+- 根因：万词总台和申请表里两条 DE 记录填了 UK 店铺编号 `1192`，其中一条店铺里的 SKU 还带了换行。系统按错误店铺编号读取 Listing，读到 UK 店铺旧数据后误判为 Listing 问题。
+- 数据修正：
+  - `B0DHVP5DL7 / DE`：店铺编号改为 `1194`，店铺里的 SKU 修正为 `PPFFSCWD-MN-EU`，申请表店铺名改为 `FunlabDirect-DE`。
+  - `B0CM3GM3B3 / DE`：店铺编号改为 `1194`，店铺里的 SKU 保持 `PPFFSC-CATPAW02-EU`，申请表店铺名改为 `FunlabDirect-DE`。
+- 代码改动：
+  - `resolve_store()` 自动反查店铺时先按站点国家筛店铺，再匹配店铺名，避免 `FunlabDirect` 这类泛名称命中 UK 店。
+  - 新增店铺编号和站点国家校验；错配时报告显示“配置需先修正”，不读取 Listing，不写表 2/3/5/6，也不发“已完成”成功话术。
+  - 14 维报告的“系统读取依据”增加店铺名、店铺国家、站点应对应国家，运营能直接看出系统读的是哪家店。
+  - `ext()` / `ss()` 统一去掉前后空格，避免店铺里的 SKU 前后带换行导致查错。
+- 验证：本地 `C:\tmp\py311-embed\python.exe -m py_compile app.py`；`C:\tmp\py311-embed\python.exe -m unittest discover -s tests`，11 个测试通过。线上只读核对 `/report?asin=B0DHVP5DL7&site=DE` 和 `/report?asin=B0CM3GM3B3&site=DE`：均显示店铺编号 `1194`、`FunlabDirect-DE`、在售状态 `BUYABLE/DISCOVERABLE`，不再显示“店铺不可售”。
+- 剩余风险：代码保护需要部署后才会在新报告里显示店铺国家和拦截错配；已修正的两条记录线上报告已恢复正确口径。
 
 ### 2026-07-17 P1：卡片闭环 + 3 天广告否词建议
 - 问题：运营如果去万词总表里手动改状态，系统无法稳定知道是谁处理、什么时候处理、处理说明是什么，也无法做到 7 天复检和 14 天升级。广告开跑后也缺少按广告组整理的否词建议闭环。

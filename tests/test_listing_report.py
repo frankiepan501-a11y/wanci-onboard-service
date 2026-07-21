@@ -114,5 +114,71 @@ class ListingReportTest(unittest.TestCase):
         self.assertIn("系统需复核", weekly["status"])
         self.assertNotIn("店铺不可售", html)
         self.assertNotIn("店铺不可售", weekly["status"])
+
+    def test_resolve_store_filters_by_site_country_before_store_name(self):
+        app = self.app
+        old_lx = app.lx
+        old_lookup = app.lookup_sku
+        sellers = [
+            {"sid": 1192, "name": "FunlabDirect-UK", "country": "英国"},
+            {"sid": 1194, "name": "FunlabDirect-DE", "country": "德国"},
+        ]
+
+        def fake_lx(path, body=None):
+            if path == "/erp/sc/data/seller/lists":
+                return {"data": sellers}
+            return {"data": []}
+
+        def fake_lookup_sku(sid, asin):
+            self.assertEqual(asin, "B0DHVP5DL7")
+            return "PPFFSCWD-MN-EU" if sid == 1194 else None
+
+        try:
+            app.lx = fake_lx
+            app.lookup_sku = fake_lookup_sku
+            sid, sku, store = app.resolve_store("B0DHVP5DL7", "DE", "FunlabDirect")
+        finally:
+            app.lx = old_lx
+            app.lookup_sku = old_lookup
+
+        self.assertEqual(sid, 1194)
+        self.assertEqual(sku, "PPFFSCWD-MN-EU")
+        self.assertEqual(store, "FunlabDirect-DE")
+
+    def test_store_site_mismatch_is_config_issue_not_listing_work(self):
+        app = self.app
+        sellers = [
+            {"sid": 1192, "name": "FunlabDirect-UK", "country": "英国"},
+            {"sid": 1194, "name": "FunlabDirect-DE", "country": "德国"},
+        ]
+        check = app.validate_store_site(1192, "DE", sellers)
+        listing = app.config_issue_listing(check["reason"], check)
+        rows = [
+            {"关键词": "hall effect controller", "矩阵": "意图词", "月搜索量": 1200, "已出单单量": 0, "我方自然排名": 0},
+        ]
+        meta = self.sample_meta()
+        meta.update({
+            "site": "DE",
+            "asin": "B0DHVP5DL7",
+            "sid": 1192,
+            "sku": "PPFFSCWD-MN-EU",
+            "store": check["store_name"],
+            "store_country": check["store_country"],
+            "expected_country": check["expected_country"],
+        })
+
+        weekly = app.compute_audit(listing, rows, "controller")
+        audit = app.audit14(meta, listing, rows)
+        html = app.render14(meta, listing, audit)
+
+        self.assertFalse(check["ok"])
+        self.assertEqual(audit["listing_availability"], "config_issue")
+        self.assertEqual(weekly["listing_availability"], "config_issue")
+        self.assertIn("配置需先修正", weekly["status"])
+        self.assertIn("配置需先修正", html)
+        self.assertIn("店铺国家", html)
+        self.assertIn("英国", html)
+        self.assertIn("德国", html)
+        self.assertNotIn("店铺不可售", weekly["status"])
 if __name__ == "__main__":
     unittest.main()

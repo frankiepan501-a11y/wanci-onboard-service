@@ -72,16 +72,16 @@ def card_api(m,p,b=None):
     try: return json.load(urllib.request.urlopen(req,timeout=60))
     except urllib.error.HTTPError as e: return {"_http":e.code,"_body":e.read().decode()[:300]}
 def ext(v):
-    if isinstance(v,list) and v and isinstance(v[0],dict): return v[0].get("text","")
-    return v if isinstance(v,(str,int,float)) else ""
+    if isinstance(v,list) and v and isinstance(v[0],dict): return str(v[0].get("text","")).strip()
+    return str(v).strip() if isinstance(v,(str,int,float)) else ""
 def ss(v):
     """Normalize Feishu single-select values, which may arrive as text or a one-item list."""
     if isinstance(v,list):
         if not v: return ""
         x=v[0]
-        if isinstance(x,dict): return str(x.get("text") or x.get("name") or x.get("value") or "")
-        return str(x)
-    return str(v) if isinstance(v,(str,int,float)) else ""
+        if isinstance(x,dict): return str(x.get("text") or x.get("name") or x.get("value") or "").strip()
+        return str(x).strip()
+    return str(v).strip() if isinstance(v,(str,int,float)) else ""
 def lall(app,tb):
     out=[];pt=""
     while True:
@@ -313,6 +313,9 @@ def listing_availability(L):
     """把接口状态分成三类：明确在售、明确不可售、系统需复核。
     重点：接口没返回 BUYABLE 只能说明状态来源不完整，不能直接等于店铺不可售。
     """
+    if L.get("config_issue"):
+        reason=ext(L.get("config_issue")) or "配置需先修正"
+        return {"state":"config_issue","buy":None,"label":reason,"raw":reason}
     vals=listing_status_values(L.get("status"))
     raw=" / ".join(vals) if vals else "接口未返回在售状态"
     if not L.get("has_record",True):
@@ -796,6 +799,49 @@ DOMAIN={"US":1,"UK":2,"DE":3,"FR":4,"ES":8,"IT":9,"CA":6,"MX":10,"JP":7,"AU":12}
 _ss=lambda v: ((v[0] if isinstance(v,list) and v else v) or "")  # 站点 GET 返回 ['US'] list,用作dict key前提取字符串(2026-06-29 魔法阵崩因)
 SITE_CN={"US":"美国","UK":"英国","DE":"德国","FR":"法国","ES":"西班牙","IT":"意大利","CA":"加拿大","MX":"墨西哥","JP":"日本","AU":"澳洲","BR":"巴西"}
 SITE_REGION={"US":"北美","CA":"北美","MX":"北美","BR":"北美","UK":"欧洲","DE":"欧洲","FR":"欧洲","ES":"欧洲","IT":"欧洲"}
+
+def _sid_int(v):
+    try: return int(float(ext(v)))
+    except Exception: return 0
+
+def site_country(site):
+    return SITE_CN.get(_ss(site),_ss(site))
+
+def seller_list():
+    try: return lx("/erp/sc/data/seller/lists",{}).get("data") or [], True
+    except Exception: return [], False
+
+def seller_by_sid(sid,sellers=None):
+    sid_i=_sid_int(sid)
+    if not sid_i: return None
+    if sellers is None:
+        sellers, ok=seller_list()
+        if not ok: return None
+    for s in sellers:
+        if _sid_int(s.get("sid"))==sid_i: return s
+    return None
+
+def validate_store_site(sid,site,sellers=None):
+    sid_i=_sid_int(sid); expected=site_country(site)
+    if not sid_i:
+        return {"ok":False,"reason":"配置需先修正：店铺编号没填，系统无法确认读取哪家店铺","expected_country":expected,"store_name":"","store_country":""}
+    loaded=True
+    if sellers is None:
+        sellers, loaded=seller_list()
+    if not loaded:
+        return {"ok":True,"reason":"","expected_country":expected,"store_name":STORE14.get(sid_i,f"sid{sid_i}"),"store_country":""}
+    s=seller_by_sid(sid_i,sellers)
+    if not s:
+        return {"ok":False,"reason":f"配置需先修正：店铺编号 {sid_i} 在领星店铺列表里查不到","expected_country":expected,"store_name":f"sid{sid_i}","store_country":""}
+    name=(s.get("name") or f"sid{sid_i}").strip(); country=(s.get("country") or "").strip()
+    if expected and country and country!=expected:
+        return {"ok":False,"reason":f"配置需先修正：店铺编号 {sid_i} 是{country}店铺，不是{_ss(site)}站应使用的{expected}店铺","expected_country":expected,"store_name":name,"store_country":country}
+    return {"ok":True,"reason":"","expected_country":expected,"store_name":name,"store_country":country}
+
+def config_issue_listing(reason,detail=None):
+    return {"title":"","bullets":[],"desc":"","st":"","status":[reason],"authored":True,"has_record":True,
+            "config_issue":reason,"config_detail":detail or {},"title_source":"未读取 Listing：配置需先修正","status_source":"未读取 Listing：配置需先修正"}
+
 MAIN_STORE=["fanlepu","funlabdirect","funlab","driesnaude","palpow","powkong"]  # 我方主力店名,优先扫(减少扫跟卖店的慢+抖动)
 def name2sid(store_name,sl):
     nm=(store_name or "").strip().lower()
@@ -808,18 +854,20 @@ def name2sid(store_name,sl):
     return None
 def resolve_store(asin,site,store_name=None):
     """从 ASIN(+店铺名/站点) 反查 (sid,seller_sku,store_name)。
-    运营给店铺名→先只扫那一个店(最快最准,Frankie 2026-06-27);否则扫该站店铺(主力店优先);单店出错跳过。"""
+    先按站点国家筛店铺，再匹配店铺名；避免 DE 站点用泛店铺名 FunlabDirect 命中 UK 店。"""
     try: sl=lx("/erp/sc/data/seller/lists",{}).get("data") or []
     except Exception: return None,None,None
-    if store_name:  # 运营指定店铺名→直接定位该店
-        nsid=name2sid(store_name,sl)
+    cn=site_country(site)
+    stores=[s for s in sl if s.get("country")==cn]
+    stores.sort(key=lambda s:0 if any(p in (s.get("name") or "").lower() for p in MAIN_STORE) else 1)
+    if store_name:
+        nsid=name2sid(store_name,stores)
         if nsid:
             try: sku=lookup_sku(nsid,asin)
             except Exception: sku=None
-            if sku: return nsid,sku,store_name
-    cn=SITE_CN.get(_ss(site),_ss(site))
-    stores=[s for s in sl if s.get("country")==cn]
-    stores.sort(key=lambda s:0 if any(p in (s.get("name") or "").lower() for p in MAIN_STORE) else 1)
+            if sku:
+                hit=seller_by_sid(nsid,stores) or {}
+                return nsid,sku,(hit.get("name") or store_name)
     for s in stores:
         try: sku=lookup_sku(s["sid"],asin)
         except Exception: continue
@@ -872,7 +920,7 @@ def process(rid):
         return {"ok":False,"err":"already processing","skip":True}
     g=lambda k: ext(rec.get(k))
     product=g("产品"); site=_ss(rec.get("站点")); region=_ss(rec.get("区域")); asin=g("ASIN"); cat=_ss(rec.get("品类"))  # 单选GET可能返list['US'],统一提字符串(写表1单选+dict key都要string)
-    op=g("负责运营"); sid=int(ext(rec.get("店铺sid")) or 0); sku=g("seller_sku(可空自动查)")
+    op=g("负责运营"); sid=_sid_int(rec.get("店铺sid")); sku=g("seller_sku(可空自动查)")
     reuse=g("复用App_token(可空,空=自动新建)"); domain=int(ext(rec.get("Sorftime_domain")) or DOMAIN.get(site,0))
     layout=_ss(rec.get("报表布局")); lin="林明坚式" in layout
     store=g("店铺名") or ""
@@ -935,35 +983,51 @@ def process(rid):
             reg_rid=((res.get("data") or {}).get("record") or {}).get("record_id","")
             log.append("已登记总台")
         # 5. seller_sku + listing
-        if not sku: sku=lookup_sku(sid,asin)
+        store_check=validate_store_site(sid,site)
+        if sid and not store_check.get("ok"):
+            rsid,rsku,rstore=resolve_store(asin,site,store)
+            if rsid:
+                sid=rsid; sku=sku or rsku; store=rstore; store_check=validate_store_site(sid,site)
+                try: upd(REG_APP,APPLY_TB,rid,{"店铺sid":sid,"店铺名":store})
+                except Exception: pass
+                log.append(f"自动修正店铺: sid={sid} sku={sku} 店={store}")
+        if store_check.get("ok") and not sku: sku=lookup_sku(sid,asin)
         if reg_rid:
             cfg={}
             if op: cfg["负责运营"]=op
-            if sid: cfg["店铺sid"]=sid
-            if sku: cfg["seller_sku"]=sku
+            if store_check.get("ok") and sid: cfg["店铺sid"]=sid
+            if store_check.get("ok") and sku: cfg["seller_sku"]=sku
             if cat: cfg["品类"]=cat
             if cfg:
                 upd(REG_APP,REG_TB,reg_rid,cfg)
         appurl=f"https://u1wpma3xuhr.feishu.cn/base/{app}"
         oid=OP_OID.get(op)
         if sku:
-            lr=lx("/listing/publish/openapi/amazon/product/search",{"store_id":sid,"skus":[sku]})
-            L=load_listing(lr)
             rows=[r["fields"] for r in lall(app,T1) if ss(r["fields"].get("站点")) in ("",site)]
             brand,ip_assoc,licensed,bxh=PRODUCT_META.get(product,("","",False,""))
             meta=dict(product=product,site=site,asin=asin,sid=sid,sku=sku,app=app,t1=T1,cat=cat,op=op,
-                      store=store or STORE14.get(sid,f"sid{sid}"),brand=brand,ip_assoc=ip_assoc,licensed=licensed)
+                      store=(store_check.get("store_name") or store or STORE14.get(sid,f"sid{sid}")),store_country=store_check.get("store_country",""),expected_country=store_check.get("expected_country",""),brand=brand,ip_assoc=ip_assoc,licensed=licensed)
             meta["品牌型号"]=bxh
+            if not store_check.get("ok"):
+                L=config_issue_listing(store_check["reason"],store_check)
+                log.append(store_check["reason"])
+                n2=n3=n5=n6=0
+            else:
+                lr=lx("/listing/publish/openapi/amazon/product/search",{"store_id":sid,"skus":[sku]})
+                L=load_listing(lr)
+                n2,n3,n5,n6=fill_234(app,T1,T2,T3,T5,T6,L,cat,site)
+                log.append(f"填表 表2={n2} 表3={n3} 表5={n5} 表6={n6}")
             html=render14(meta,L,audit14(meta,L,rows))
             hp=os.path.join(tmp,f"audit14_{asin}_{site}.html"); io.open(hp,"w",encoding="utf-8").write(html)
-            n2,n3,n5,n6=fill_234(app,T1,T2,T3,T5,T6,L,cat,site)
-            log.append(f"填表 表2={n2} 表3={n3} 表5={n5} 表6={n6}")
             if oid:
                 fk=upload_file(hp,f"{product}-{site}-listing审计_14维.html")
                 report_url=f"{REPORT_BASE}/report?asin={asin}&site={site}"
-                im_text(oid,f"✅【万词·14维Listing审计完成】{product} {site} 作战台已建好+6表全填好。审计报告已按旧版14维结构生成。\n在线报告：{report_url}\n附件也已发送，请用浏览器打开查看。")
+                if L.get("config_issue"):
+                    im_text(oid,f"⚠️【万词·配置需先修正】{product} {site}：系统没有读取 Listing，因为店铺编号和站点不匹配。\n问题：{store_check.get('reason','配置需先修正')}\n下一步：先核对万词总台里的店铺编号、店铺里的 SKU 和 ASIN，再重新生成报告。\n在线报告：{report_url}\n附件也已发送，请用浏览器打开查看。")
+                else:
+                    im_text(oid,f"✅【万词·14维Listing审计完成】{product} {site} 作战台已建好+6表全填好。审计报告已按旧版14维结构生成。\n在线报告：{report_url}\n附件也已发送，请用浏览器打开查看。")
                 im_file(oid,fk); log.append(f"已发运营 {op}")
-            final_status="已完成"
+            final_status="失败" if L.get("config_issue") else "已完成"
         else:
             # 跳过审计=未完成: 通知运营补救+状态设失败,不冒充"已完成"(Frankie 2026-06-27: 完成=全表填好+通知运营)
             log.append("⚠️ 查不到seller_sku,跳过审计(词库已建,需补sid或查ASIN)")
@@ -996,9 +1060,11 @@ def compute_audit(L,rows,cat):
     sens=lambda r: r["mx"] in ("IP词","品牌词-竞品") or is_ip(r["kw"]) or is_comp(r["kw"]) or is_trademark(r["kw"])
     ugc=[r for r in R if sens(r)]; embeddable=[r for r in R if r["qual"] and not sens(r)]
     miss=agg_roots(sorted([r for r in embeddable if not(r["front"] or r["instr"])],key=lambda r:-(r["vol"]+r["ord"]*5000)))
-    avail=listing_availability(L); be=len(L["bullets"])==0; de=not L["desc"].strip(); se=not L["st"].strip(); buy=avail["buy"] is True; sale_unavailable=avail["state"]=="unavailable"; sale_unknown=avail["state"]=="unknown"
+    avail=listing_availability(L); be=len(L["bullets"])==0; de=not L["desc"].strip(); se=not L["st"].strip(); buy=avail["buy"] is True; sale_unavailable=avail["state"]=="unavailable"; sale_unknown=avail["state"]=="unknown"; config_issue=avail["state"]=="config_issue"
     notext=(not L["title"].strip()) and be and de and se
-    if not L.get("has_record", True):
+    if config_issue:
+        status=avail["label"]
+    elif not L.get("has_record", True):
         status="店铺没这条Listing"
     elif not L.get("authored", True):
         status="本店未自建文案"
@@ -1719,13 +1785,17 @@ def do_review(frankie_only=False,dry=False,run_id=None):
         status=ss(f.get("状态"))
         haverank=bool(ext(f.get("rank子表id"))) and status=="在跑"
         try:
-            if not sku and sid: sku=lookup_sku(sid,asin)
-            if not sku: errors.append(f"{product}-{site}:无sku"); continue
-            lr=lx("/listing/publish/openapi/amazon/product/search",{"store_id":sid,"skus":[sku]})
-            L=load_listing(lr)
+            store_check=validate_store_site(sid,site)
+            if not store_check.get("ok"):
+                L=config_issue_listing(store_check["reason"],store_check)
+            else:
+                if not sku and sid: sku=lookup_sku(sid,asin)
+                if not sku: errors.append(f"{product}-{site}:无sku"); continue
+                lr=lx("/listing/publish/openapi/amazon/product/search",{"store_id":sid,"skus":[sku]})
+                L=load_listing(lr)
             rows=[x["fields"] for x in lall(app2,t1) if ss(x["fields"].get("站点"))==site]
             m=compute_audit(L,rows,cat)
-            meta=metam(sid).get(asin,{}); perf=perfm(sid).get(asin,{})
+            meta=({} if L.get("config_issue") else metam(sid).get(asin,{})); perf=({} if L.get("config_issue") else perfm(sid).get(asin,{}))
             bsr=meta.get("bsr"); fba=meta.get("fba"); thirty=meta.get("thirty")
             impr7=perf.get("impr",0); impr2=perf.get("impr2",0); clk=perf.get("clicks",0); cost=round(perf.get("cost",0.0),2); ords=perf.get("orders",0); sal=perf.get("sales",0.0)
             ctr=round(100.0*clk/impr7,2) if impr7 else 0; cvr=round(100.0*ords/clk,1) if clk else 0; acos=round(100.0*cost/sal,1) if sal else 0
@@ -1943,7 +2013,7 @@ def audit14(meta, L, rows):
     missu=sorted([r for r in ugc if not(r["front"] or r["instr"])],key=lambda r:-(r["vol"]+r["ord"]*5000))
     nz=sorted(noise,key=lambda r:-r["vol"])
     # listing 健康
-    avail=listing_availability(L); be=len(L["bullets"])==0; de=not L["desc"].strip(); se=not L["st"].strip(); buy=avail["buy"] is True; sale_unavailable=avail["state"]=="unavailable"; sale_unknown=avail["state"]=="unknown"
+    avail=listing_availability(L); be=len(L["bullets"])==0; de=not L["desc"].strip(); se=not L["st"].strip(); buy=avail["buy"] is True; sale_unavailable=avail["state"]=="unavailable"; sale_unknown=avail["state"]=="unknown"; config_issue=avail["state"]=="config_issue"
     notext=(not L["title"].strip()) and be and de and se
     nbul=len(L["bullets"])
     # R2/R6 标题结构检查
@@ -2008,7 +2078,7 @@ def audit14(meta, L, rows):
         cover_pct=round(100.0*embedded/max(total,1)),rec_pct=round(100.0*len(rk)/max(total,1)),
         fit=fit,n_embeddable=len(embeddable),n_ugc=len(ugc),
         miss=miss[:20],missu=missu[:12],noise=nz[:15],supp=supp,soft=soft,
-        nbul=nbul,be=be,de=de,se=se,buy=buy,sale_unavailable=sale_unavailable,sale_unknown=sale_unknown,listing_availability=avail["state"],availability_label=avail["label"],listing_status_raw=avail["raw"],title_source=L.get("title_source","接口未返回标题"),status_source=L.get("status_source","摘要状态(summaries.status)"),notext=notext,authored=L.get("authored",True),has_record=L.get("has_record",True),
+        nbul=nbul,be=be,de=de,se=se,buy=buy,sale_unavailable=sale_unavailable,sale_unknown=sale_unknown,config_issue=config_issue,listing_availability=avail["state"],availability_label=avail["label"],listing_status_raw=avail["raw"],title_source=L.get("title_source","接口未返回标题"),status_source=L.get("status_source","摘要状态(summaries.status)"),notext=notext,authored=L.get("authored",True),has_record=L.get("has_record",True),
         miss_title=miss_title,has_scene=has_scene,has_pain=has_pain,has_after=has_after,
         st_ip=st_ip,st_mis=st_mis,st_sug=sug,st_sug_bytes=by(sug),ip_lib=ip_lib,
         front_ip=front_ip,front_tm=front_tm,front_comp=front_comp,core_cov=core_cov,core_gap=core_gap)
@@ -2039,7 +2109,11 @@ code{{background:#1a1a20;padding:1px 5px;border-radius:3px;color:#cfcfd4;font-si
     top_problem="Listing 正常，可继续做埋词和收录优化"
     top_impact="当前没有基础 Listing 阻塞，重点看漏埋词、收录变化和广告承接。"
     top_next="按下方漏埋词清单补标题、五点、描述和后台搜索词，再观察下一轮收录。"
-    if not a["has_record"]:
+    if a.get("config_issue"):
+        top_problem=a.get("availability_label") or "配置需先修正"
+        top_impact="店铺编号和站点不匹配，系统会读到别的店铺 Listing，标题、在售状态、库存和广告判断都会失真。"
+        top_next="先修万词总台里的店铺编号和店铺里的 SKU，再重新生成报告。"
+    elif not a["has_record"]:
         top_problem="店铺没这条 Listing"
         top_impact="系统查不到这条店铺 SKU，无法判断文案、后台搜索词和广告是否正常。"
         top_next="先核对万词总表里的店铺编号和店铺 SKU，确认是否填错店铺或旧 SKU。"
@@ -2061,7 +2135,7 @@ code{{background:#1a1a20;padding:1px 5px;border-radius:3px;color:#cfcfd4;font-si
             top_problem="Listing需先处理："+" / ".join(mp)
             top_impact="明确的 Listing 问题会影响广告和收录判断；在售状态不一致的部分先由系统复核。"
             top_next="先处理后台搜索词/五点/描述等明确问题；如果只是状态不一致，运营先不用改 Listing。"
-    top_owner="系统" if (a.get("sale_unknown") and not (a["be"] or a["de"] or a["se"] or a.get("sale_unavailable"))) else (meta.get("op") or "负责运营")
+    top_owner="系统" if (a.get("config_issue") or (a.get("sale_unknown") and not (a["be"] or a["de"] or a["se"] or a.get("sale_unavailable")))) else (meta.get("op") or "负责运营")
     h.append("<div class=box style='border-color:#ffb454;background:#251c12'><b>先看这个</b><table>"
              f"<tr><th>问题</th><td>{esc(top_problem)}</td></tr>"
              f"<tr><th>影响</th><td>{esc(top_impact)}</td></tr>"
@@ -2070,6 +2144,9 @@ code{{background:#1a1a20;padding:1px 5px;border-radius:3px;color:#cfcfd4;font-si
              "</table></div>")
     h.append("<div class=box><b>系统读取依据</b><table>"
              f"<tr><th>店铺编号</th><td>{esc(meta.get('sid',''))}</td></tr>"
+             f"<tr><th>店铺名</th><td>{esc(meta.get('store',''))}</td></tr>"
+             f"<tr><th>店铺国家</th><td>{esc(meta.get('store_country','') or '系统未取到')}</td></tr>"
+             f"<tr><th>站点应对应国家</th><td>{esc(meta.get('expected_country','') or site_country(meta.get('site','')))}</td></tr>"
              f"<tr><th>店铺里的 SKU</th><td>{esc(meta.get('sku',''))}</td></tr>"
              f"<tr><th>ASIN</th><td>{esc(meta.get('asin',''))}</td></tr>"
              f"<tr><th>系统读到的在售状态</th><td>{esc(a.get('listing_status_raw') or '接口未返回')}</td></tr>"
@@ -2081,7 +2158,8 @@ code{{background:#1a1a20;padding:1px 5px;border-radius:3px;color:#cfcfd4;font-si
     h.append(f"<div class=box><b>📋 这次审计覆盖了什么</b><br>✅ 已审(数据驱动):埋词覆盖·收录分层·后台搜索词·机型兼容·品牌名·合规·IP联想 ｜ 🖼 需人看图:主图·A+ ｜ 📝 需运营后台看:评价星级·QA数·差评·售价 ｜ ✍ 需运营改写(本站给结构指引,主力产品才出精修稿):标题/五点/描述文案 ｜ ⚪ 没做:AI推荐参考词·毛利<br><span class=sub>词库 {a['total']} 词 ｜ 埋词覆盖 {a['cover_pct']}% ｜ 已收录(有自然排名){a['recorded']} 词</span></div>")
     # 头号问题
     banner=[]
-    if not a["has_record"]: banner.append("🟡 该店铺 SKU 在本店无 Listing 记录 → 先核对店铺编号和店铺 SKU")
+    if a.get("config_issue"): banner.append("🟡 配置需先修正 → 先核对店铺编号、店铺里的 SKU、ASIN 和站点，再重新生成报告")
+    elif not a["has_record"]: banner.append("🟡 该店铺 SKU 在本店无 Listing 记录 → 先核对店铺编号和店铺 SKU")
     elif not a["authored"]: banner.append("🟡 本店未自建文案(跟卖他人 ASIN)→ 要埋词须自建独立 listing")
     elif a["notext"]: banner.append("🔴 listing 文案全空 → 请运营核实后台是否建全")
     elif a["be"] or a["de"] or a["se"] or a.get("sale_unavailable") or a.get("sale_unknown"):
@@ -2107,7 +2185,10 @@ code{{background:#1a1a20;padding:1px 5px;border-radius:3px;color:#cfcfd4;font-si
     miss_t=("、".join(a["miss_title"]) if a["miss_title"] else "")
     listing_health_text="状态可售,合规无裸写品牌/IP"
     listing_health_state=GN
-    if a.get("sale_unknown"):
+    if a.get("config_issue"):
+        listing_health_text="🟡 配置需先修正：店铺编号和站点不匹配，先不判断 Listing 文案和广告"
+        listing_health_state="🟡 系统复核"
+    elif a.get("sale_unknown"):
         listing_health_text="🟡 系统需复核：在售状态读取不一致，不要求运营先改 Listing"
         listing_health_state="🟡 系统复核"
     elif a["front_ip"]:
@@ -2149,7 +2230,7 @@ code{{background:#1a1a20;padding:1px 5px;border-radius:3px;color:#cfcfd4;font-si
     # 标题诊断
     h.append("<h2>① 标题诊断（结构指引，运营改写）</h2>")
     h.append(f"<div class=box><span class=old>系统读到的标题（来源：{esc(a.get('title_source') or '')}）：</span><br>{esc(L['title'])}</div>")
-    if a.get("sale_unknown") or "summaries.itemName" in (a.get("title_source") or ""):
+    if a.get("config_issue") or a.get("sale_unknown") or "summaries.itemName" in (a.get("title_source") or ""):
         h.append("<div class=box style='border-color:#ffb454;background:#251c12'><b class=warn>标题核对提醒</b><br>如果运营后台已改标题或后台显示在售，但这里不同，以后台截图为准；本报告只是系统当前读到的数据，先由系统复核，不要求运营按这条标题直接改。</div>")
     if a["miss_title"]:
         seg3=("卖点+灯效官方术语" if any("Hidden Glow" in m for m in a["miss_title"]) else "卖点")
@@ -2276,15 +2357,21 @@ def report(asin:str, site:str):
             if ext(f.get("ASIN"))==asin and ss(f.get("站点"))==site: row=f; break
         if not row: return HTMLResponse(f"<h1>未找到 {esc(asin)} / {esc(site)} 的作战台登记</h1>",status_code=404)
         product=ext(row.get("产品")); cat=ext(row.get("品类")) or "controller"; op=ext(row.get("负责运营"))
-        sid=int(ext(row.get("店铺sid")) or 0); sku=ext(row.get("seller_sku"))
+        sid=_sid_int(row.get("店铺sid")); sku=ext(row.get("seller_sku"))
         app2=ext(row.get("作战台App_token")); t1=ext(row.get("词库表id"))
-        if not sku and sid: sku=lookup_sku(sid,asin)
+        store_check=validate_store_site(sid,site)
+        if store_check.get("ok") and not sku and sid: sku=lookup_sku(sid,asin)
         brand,ip_assoc,licensed,bxh=PRODUCT_META.get(product,("","",False,""))
         meta=dict(product=product,site=site,asin=asin,sid=sid,sku=sku,app=app2,t1=t1,cat=cat,op=op,
-                  store=STORE14.get(sid,str(sid)),brand=brand,ip_assoc=ip_assoc,licensed=licensed)
+                  store=(store_check.get("store_name") or STORE14.get(sid,str(sid))),store_country=store_check.get("store_country",""),expected_country=store_check.get("expected_country",""),brand=brand,ip_assoc=ip_assoc,licensed=licensed)
         meta["品牌型号"]=bxh
-        d=lx("/listing/publish/openapi/amazon/product/search",{"store_id":sid,"skus":[sku]})
-        L=load_listing(d)
+        if not store_check.get("ok"):
+            L=config_issue_listing(store_check["reason"],store_check)
+        elif not sku:
+            L=config_issue_listing("配置需先修正：店铺里的 SKU 没填，系统无法检查 Listing",store_check)
+        else:
+            d=lx("/listing/publish/openapi/amazon/product/search",{"store_id":sid,"skus":[sku]})
+            L=load_listing(d)
         rows=[x["fields"] for x in lall(app2,t1) if ss(x["fields"].get("站点")) in ("",site)]
         a=audit14(meta,L,rows)
         return HTMLResponse(render14(meta,L,a))
