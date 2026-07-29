@@ -102,6 +102,26 @@ def clear(app,tb,pred=None):
     ids=[r["record_id"] for r in lall(app,tb) if (pred is None or pred(r["fields"]))]
     for i in range(0,len(ids),200):
         api("POST",f"/bitable/v1/apps/{app}/tables/{tb}/records/batch_delete",{"records":ids[i:i+200]}); time.sleep(0.2)
+def _sel(opts): return {"options":[{"name":x} for x in opts]}
+CIHAI_WORD_TYPES=["意图词","功能词","场景词","人群词","痛点词","平台词","机型词","竞品词","IP词","礼品词","价格词","口语问句","噪音词","其他"]
+CIHAI_AD_ROLES=["词海广告","漏斗广告","捡漏广告","UGC/竞品广告","否词候选"]
+CIHAI_STATUS=["待测","核心待攻","已出单待回填","UGC候选","否定候选","低价捡漏"]
+CIHAI_QA_STATUS=["文案已回答","仅后台ST","待补QA/文案","UGC/QA引导","不适合QA"]
+T1_CIHAI_FIELDS=[("SPR",2,{"formatter":"0"}),("我方广告排名",2,{"formatter":"0"}),("竞品前十ASIN",1,None),
+                 ("词根",1,None),("词型",3,_sel(CIHAI_WORD_TYPES)),("用户问题",1,None),
+                 ("广告角色",3,_sel(CIHAI_AD_ROLES)),("词海状态",3,_sel(CIHAI_STATUS)),("复盘动作",1,None)]
+T2_CIHAI_FIELDS=[("词型",3,_sel(CIHAI_WORD_TYPES)),("用户问题",1,None),("AI问句覆盖位置",1,None),
+                 ("QA覆盖状态",3,_sel(CIHAI_QA_STATUS)),("词海复盘动作",1,None)]
+T3_CIHAI_FIELDS=[("广告角色",3,_sel(CIHAI_AD_ROLES)),("词海复盘动作",1,None)]
+def ensure_fields(app,tb,defs):
+    """Create missing Bitable fields only; never rewrites existing field types/options."""
+    data=api("GET",f"/bitable/v1/apps/{app}/tables/{tb}/fields?page_size=200")
+    have={f["field_name"] for f in (data.get("data") or {}).get("items",[])}
+    for n,ty,prop in defs:
+        if n in have: continue
+        b={"field_name":n,"type":ty}
+        if prop: b["property"]=prop
+        api("POST",f"/bitable/v1/apps/{app}/tables/{tb}/fields",b)
 def ensure_site(app,tb):
     have={f["field_name"] for f in api("GET",f"/bitable/v1/apps/{app}/tables/{tb}/fields?page_size=200")["data"]["items"]}
     if "站点" not in have:
@@ -365,6 +385,98 @@ def matrix(kw,cat=None):
 def tier(v):
     if v is None: return None
     return "大词" if v>=10000 else ("中词" if v>=1000 else "小词")
+QUESTION_PATTERNS=["best ","what ","which ","how ","can ","does ","is ","are ","compatible","work with","works with","fit ","fits ","for kids","for children","for travel","for family","gift for","适合","怎么","如何","哪款","能不能","可以用"]
+SCENE_PATTERNS=["travel","portable","on the go","tv mode","handheld","desk","couch","sofa","living room","party","school","office","commute","旅行","便携","客厅","桌面","派对","通勤"]
+AUDIENCE_PATTERNS=["kids","children","child","family","gamer","gamers","pro player","beginner","girl","boy","adult","teen","玩家","儿童","小孩","家庭","新手","女生","男生"]
+PAIN_PATTERNS=["drift","no drift","stick drift","lag","low latency","disconnect","scratch","protect","overheat","slip","heavy","tired","broken","散热","漂移","延迟","断连","刮花","防滑","保护","累手"]
+FEATURE_PATTERNS=["hall","turbo","rgb","bluetooth","wireless","wired","nfc","wake","macro","paddle","trigger","4k","hdmi","fan","cooling","charge","charging","storage","hard shell","case","dock","controller","gamepad","joystick","霍尔","连发","灯效","蓝牙","无线","唤醒","散热","充电","收纳","硬壳"]
+def _has_any(text,patterns):
+    t=" "+str(text).lower()+" "
+    return any(p in t for p in patterns)
+def keyword_root(kw,cat=None):
+    parts=[w for w in toks(kw) if w not in MACHINE_TOK]
+    if not parts: return str(kw).strip().lower()
+    return " ".join(parts[:8])
+def cihai_word_type(kw,mx="",cat=None):
+    k=str(kw or "").lower().strip(); mx=ss(mx)
+    if not k: return "其他"
+    if mx=="排除-价格二手" or any(w in k for w in PRICEg): return "价格词"
+    if mx.startswith("排除") or is_hard_platform(k) or is_laptop_dock(k) or is_cross_noise(k) or is_pure_console(k): return "噪音词"
+    if mx=="IP词" or is_ip(k): return "IP词"
+    if mx=="品牌词-竞品" or is_comp(k): return "竞品词"
+    if is_machine_compat(k): return "机型词"
+    if mx=="品牌词-平台" or k in PLATFORMg: return "平台词"
+    if _has_any(k,QUESTION_PATTERNS): return "口语问句"
+    if mx=="礼品词" or _has_any(k,GIFTg): return "礼品词"
+    if _has_any(k,PAIN_PATTERNS): return "痛点词"
+    if _has_any(k,AUDIENCE_PATTERNS): return "人群词"
+    if _has_any(k,SCENE_PATTERNS): return "场景词"
+    if _has_any(k,FEATURE_PATTERNS) or any(a in k for a in CAT_ANCHORS.get(cat,CAT_ANCHORS["dock"])): return "功能词"
+    return "意图词"
+def cihai_user_question(kw,word_type,cat=None):
+    term=str(kw or "").strip()
+    if not term: return ""
+    wt=ss(word_type)
+    if wt=="口语问句": return f"用户会问：{term}？"
+    if wt in ("平台词","机型词"): return f"用户会问：这款产品是否兼容 {term}？"
+    if wt=="功能词": return f"用户会问：它是否具备 {term} 相关功能？"
+    if wt=="场景词": return f"用户会问：它是否适合 {term} 场景？"
+    if wt=="人群词": return f"用户会问：它是否适合 {term} 人群？"
+    if wt=="痛点词": return f"用户会问：它能不能解决 {term} 这类问题？"
+    if wt=="礼品词": return f"用户会问：它适不适合作为 {term} 礼物？"
+    if wt in ("竞品词","IP词"): return f"用户会问：它和 {term} 的关联/区别是什么？"
+    return f"用户会问：为什么要选这款 {term}？"
+def cihai_ops_fields(fields):
+    mx=ss(fields.get("矩阵")); wt=ss(fields.get("词型")); tv=ss(fields.get("词级"))
+    kw=ext(fields.get("关键词")); orders=float(ext(fields.get("已出单单量")) or 0)
+    if mx.startswith("排除") or wt in ("噪音词","价格词"):
+        return "否词候选","否定候选","加入否定词库或保留观察，不进入 Listing 和核心广告。"
+    if mx in ("IP词","品牌词-竞品") or wt in ("IP词","竞品词") or is_ip(kw) or is_comp(kw) or is_trademark(kw):
+        return "UGC/竞品广告","UGC候选","不直写 Listing；用 Review/QA/达人内容承接，广告侧走 SD 或竞品定投。"
+    if orders>0:
+        return "漏斗广告","已出单待回填","优先补 Listing 四层覆盖，并进入 Exact/Broad 漏斗复盘。"
+    if tv=="大词":
+        return "漏斗广告","核心待攻","进入核心 Exact/SBV 漏斗，周复盘排名和转化。"
+    if tv=="小词":
+        return "捡漏广告","低价捡漏","低 bid 放 Auto/Broad 捡漏，3-7 天按点击/出单决定去留。"
+    return "词海广告","待测","放词海广告低预算测试，按搜索词报告、排名和出单回填。"
+def cihai_enrich(fields,cat=None):
+    kw=ext(fields.get("关键词")); mx=ss(fields.get("矩阵"))
+    wt=ss(fields.get("词型")) or cihai_word_type(kw,mx,cat)
+    fields["词根"]=fields.get("词根") or keyword_root(kw,cat)
+    fields["词型"]=wt
+    fields["用户问题"]=fields.get("用户问题") or cihai_user_question(kw,wt,cat)
+    role,status,action=cihai_ops_fields(fields)
+    fields["广告角色"]=fields.get("广告角色") or role
+    fields["词海状态"]=fields.get("词海状态") or status
+    fields["复盘动作"]=fields.get("复盘动作") or action
+    return fields
+def cihai_question_like(word_type):
+    return ss(word_type) in ("口语问句","场景词","人群词","痛点词","功能词","礼品词")
+def cihai_cover_location(inT,inB,inD,inS):
+    loc=[]
+    if inT: loc.append("标题")
+    if inB: loc.append("五点")
+    if inD: loc.append("描述")
+    if loc: return "/".join(loc)
+    if inS: return "仅后台ST"
+    return "未覆盖"
+def cihai_t2_fields(f,kw,mx,cat,inT,inB,inD,inS):
+    wt=ss(f.get("词型")) or cihai_word_type(kw,mx,cat)
+    q=ext(f.get("用户问题")) or cihai_user_question(kw,wt,cat)
+    if mx in ("IP词","品牌词-竞品") or wt in ("IP词","竞品词") or is_ip(kw) or is_comp(kw) or is_trademark(kw):
+        qa="UGC/QA引导"
+    elif not cihai_question_like(wt):
+        qa="不适合QA"
+    elif inT or inB or inD:
+        qa="文案已回答"
+    elif inS:
+        qa="仅后台ST"
+    else:
+        qa="待补QA/文案"
+    _f=dict(f); _f.update({"关键词":kw,"矩阵":mx,"词型":wt})
+    return {"词型":wt,"用户问题":q,"AI问句覆盖位置":cihai_cover_location(inT,inB,inD,inS),
+            "QA覆盖状态":qa,"词海复盘动作":ext(f.get("复盘动作")) or cihai_ops_fields(_f)[2]}
 def numv(x):
     if x is None: return None
     s=str(x).strip()
@@ -483,17 +595,13 @@ def import_keywords(files,site,asin,cat=None):
         if tv: d["词级"]=tv
         d["来源"]=";".join(SRC[s] for s in sorted(d["_src"])); d["数据更新日"]=TODAY; d.pop("_src",None)
         if d.get("月搜索量")==0: d.pop("月搜索量",None)
+        cihai_enrich(d,cat)
         t1.append(d)
     t4=[{"关键词":kw,"站点":site,"自然排名":nat,"是否收录":True,"快照日期":TODAY,"距首页差距":str(max(0,int(nat-16)))} for kw,nat in self_ranks.items()]
     return t1,t4,skipped
 
 def ensure_t1_extra(app,t1):
-    have={f["field_name"] for f in api("GET",f"/bitable/v1/apps/{app}/tables/{t1}/fields?page_size=200")["data"]["items"]}
-    for n,ty,prop in [("SPR",2,{"formatter":"0"}),("我方广告排名",2,{"formatter":"0"}),("竞品前十ASIN",1,None)]:
-        if n not in have:
-            b={"field_name":n,"type":ty};
-            if prop: b["property"]=prop
-            api("POST",f"/bitable/v1/apps/{app}/tables/{t1}/fields",b)
+    ensure_fields(app,t1,T1_CIHAI_FIELDS)
 
 # ───────────────── 职务级授权: 万词文档自动给「亚马逊运营专员」全员(Frankie 2026-06-29 立) ─────────────────
 # 实时查飞书人事花名册(单一真相源,不硬编人名)→在职「亚马逊运营专员」open_id→逐人授(职务/部门不能直接当协作者)
@@ -623,7 +731,21 @@ def make_html(product,site,asin,store,L,rows,cat):
 COLORS=["red","pink","blue","black","white","green","purple","yellow","gray","grey","clear","orange","mint","lavender"]
 PRICE=["used","refurbished","renewed","deals","cheap","clearance","second hand","segunda mano","usado","reacondicionado"]
 CROSS={"dock":["controller","case","carrying case","screen protector","grip","skin","joycon","tempered glass","wired controller"],"controller":["case","carrying case","cover","skin","dock","docking station","wall mount","screen protector","tempered glass","grip tape"],"case":["controller","dock","docking station","charger","grip","joycon","screen protector","wall mount"]}
-def P(name,atype,match,kws,bid,budget,acos,stage,reason): return {"计划名":name,"广告类型":atype,"匹配类型":match,"包含关键词":kws,"建议bid":bid,"建议日预算":budget,"目标ACoS":acos,"状态":"待审","阶段":stage,"开广告理由":reason,"已出单":0}
+def ad_plan_role(name,atype,match,stage):
+    n=str(name); m=str(match)
+    if "竞品" in n or "ASIN" in m: return "UGC/竞品广告"
+    if "核心" in n or "SBV" in n or "Exact" in n or stage=="P2": return "漏斗广告"
+    if "捡" in n or "Auto" in n or "长尾" in n: return "捡漏广告"
+    return "词海广告"
+def ad_plan_action(role):
+    return {"漏斗广告":"核心词/中词承接排名和转化，周复盘排名、ACoS、出单。",
+            "捡漏广告":"低 bid 控预算捡长尾，3-7 天无点击/无出单就降级或否定。",
+            "UGC/竞品广告":"不进 Listing 直写；广告侧走竞品/ASIN承接，内容侧走 Review/QA。",
+            "否词候选":"只进入否词检查，不投放。"}.get(role,"低预算测试搜索意图，按搜索词报告回填词海状态。")
+def P(name,atype,match,kws,bid,budget,acos,stage,reason):
+    role=ad_plan_role(name,atype,match,stage)
+    return {"计划名":name,"广告类型":atype,"匹配类型":match,"包含关键词":kws,"建议bid":bid,"建议日预算":budget,"目标ACoS":acos,
+            "状态":"待审","阶段":stage,"开广告理由":reason,"已出单":0,"广告角色":role,"词海复盘动作":ad_plan_action(role)}
 def local_comp_brands(rows,topn=8):
     """#翔宇: SD竞品定投取本站词库真实竞品品牌(本地市场)非美国硬编。
     按「变体出现数」为主(防月搜量缺失埋没 PowerA/PDP 等少变体但市场突出品牌),月搜量为次。"""
@@ -727,26 +849,28 @@ def fill_234(app,t1,t2,t3,t5,t6,L,cat,site):
     dt=set(toks(L["desc"])); st=set(toks(L["st"])); front=tt|bt|dt
     def cov(kw,s): k=toks(kw); return bool(k) and all(w in s for w in k)
     rows=[r["fields"] for r in lall(app,t1) if r["fields"].get("站点")==site]
-    ensure_site(app,t2); clear(app,t2,lambda f:f.get("站点")==site)
+    ensure_site(app,t2); ensure_fields(app,t2,T2_CIHAI_FIELDS); clear(app,t2,lambda f:f.get("站点")==site)
     t2r=[]
     for f in rows:
-        kw=ext(f.get("关键词")); mx=f.get("矩阵")
-        if mx not in ("意图词","品牌词-平台","品牌词-竞品","IP词"): continue
+        kw=ext(f.get("关键词")); mx=ss(f.get("矩阵"))
+        if mx not in ("意图词","品牌词-平台","品牌词-竞品","IP词","礼品词"): continue
         inT=cov(kw,tt);inB=cov(kw,bt);inD=cov(kw,dt);inS=cov(kw,st);fr=cov(kw,front)
-        ch=("直写前台(标题/五点/描述/后台搜索词)" if mx=="意图词" else ("后台搜索词已埋(for形式)+UGC" if (mx=="品牌词-平台" and "nintendo" in kw.lower()) else ("直写前台(标题/五点/描述/后台搜索词)" if mx=="品牌词-平台" else ("UGC评论QA+广告可打" if mx=="品牌词-竞品" else "UGC评论QA"))))
+        ch=("直写前台(标题/五点/描述/后台搜索词)" if mx in ("意图词","礼品词") else ("后台搜索词已埋(for形式)+UGC" if (mx=="品牌词-平台" and "nintendo" in kw.lower()) else ("直写前台(标题/五点/描述/后台搜索词)" if mx=="品牌词-平台" else ("UGC评论QA+广告可打" if mx=="品牌词-竞品" else "UGC评论QA"))))
         kl=kw.lower()
         if is_misspell(kl): status="拼写变体(广告可投·勿写listing)"
         elif is_trademark(kl): status=("⚠️商标在标题/五点·撤(仅描述/ST用for-para措辞)" if (inT or inB) else ("ST合规(for形式)+UGC" if inS else "仅for/compatible措辞+UGC"))
         elif is_comp(kl) or is_ip(kl) or mx in ("品牌词-竞品","IP词"): status="UGC引导(勿直写)"
         elif fr or inS: status="已埋" if fr else "已埋(后台搜索词)"
-        elif mx in ("意图词","品牌词-平台"): status="待埋(补描述)" if qualify_embed(kw,cat,supp,soft,_qa) else "不埋"
+        elif mx in ("意图词","品牌词-平台","礼品词"): status="待埋(补描述)" if qualify_embed(kw,cat,supp,soft,_qa) else "不埋"
         else: status="UGC待引导"
-        t2r.append({"关键词":kw,"站点":site,"矩阵":mx,"埋词渠道":ch,"标题已埋":inT,"五点已埋":inB,"描述已埋":inD,"后台ST已埋":inS,"前台已覆盖":fr,"埋词状态":status})
+        row={"关键词":kw,"站点":site,"矩阵":mx,"埋词渠道":ch,"标题已埋":inT,"五点已埋":inB,"描述已埋":inD,"后台ST已埋":inS,"前台已覆盖":fr,"埋词状态":status}
+        row.update(cihai_t2_fields(f,kw,mx,cat,inT,inB,inD,inS))
+        t2r.append(row)
     n2=batch(app,t2,t2r)
     n5=0
     if not lall(app,t5):
         n5=batch(app,t5,[{"阶段":"P1 (0-30d)","阶段目标":"低SPR小词冲首页+核心品类词建联","关键KPI":"核心词进首页;Auto挖词反哺","农村是否生效":"观察中","下阶段触发条件":"核心词稳定P1"},{"阶段":"P2 (30-60d)","阶段目标":"大词排名爬升+中词扩量+补埋","关键KPI":"大词进前2页;簇收录率>50%","农村是否生效":"观察中","下阶段触发条件":"大词进前2页+ACoS可控"},{"阶段":"P3 (60d+)","阶段目标":"核心词进前10转防守+SD打竞品","关键KPI":"核心词稳定前10","农村是否生效":"观察中","下阶段触发条件":"前10稳定2周"}])
-    ensure_site(app,t3); clear(app,t3,lambda f:f.get("站点")==site)  # per-site: 多站点app每站独立广告框架(本地语言词)
+    ensure_site(app,t3); ensure_fields(app,t3,T3_CIHAI_FIELDS); clear(app,t3,lambda f:f.get("站点")==site)  # per-site: 多站点app每站独立广告框架(本地语言词)
     t3rows=ads_tpl(cat,site,rows,soft,supp,listing_attrs(L))
     for p in t3rows: p["站点"]=site
     n3=batch(app,t3,t3rows)
@@ -1090,21 +1214,23 @@ def refresh_t2(app,t1,t2,L,cat,site):
     dt=set(toks(L["desc"])); st=set(toks(L["st"])); front=tt|bt|dt
     def cov(kw,s): k=toks(kw); return bool(k) and all(w in s for w in k)
     rows=[r["fields"] for r in lall(app,t1) if r["fields"].get("站点")==site]
-    ensure_site(app,t2); clear(app,t2,lambda f:f.get("站点")==site)
+    ensure_site(app,t2); ensure_fields(app,t2,T2_CIHAI_FIELDS); clear(app,t2,lambda f:f.get("站点")==site)
     t2r=[]
     for f in rows:
-        kw=ext(f.get("关键词")); mx=f.get("矩阵")
-        if mx not in ("意图词","品牌词-平台","品牌词-竞品","IP词"): continue
+        kw=ext(f.get("关键词")); mx=ss(f.get("矩阵"))
+        if mx not in ("意图词","品牌词-平台","品牌词-竞品","IP词","礼品词"): continue
         inT=cov(kw,tt);inB=cov(kw,bt);inD=cov(kw,dt);inS=cov(kw,st);fr=cov(kw,front)
-        ch=("直写前台(标题/五点/描述/后台搜索词)" if mx=="意图词" else ("后台搜索词已埋(for形式)+UGC" if (mx=="品牌词-平台" and "nintendo" in kw.lower()) else ("直写前台(标题/五点/描述/后台搜索词)" if mx=="品牌词-平台" else ("UGC评论QA+广告可打" if mx=="品牌词-竞品" else "UGC评论QA"))))
+        ch=("直写前台(标题/五点/描述/后台搜索词)" if mx in ("意图词","礼品词") else ("后台搜索词已埋(for形式)+UGC" if (mx=="品牌词-平台" and "nintendo" in kw.lower()) else ("直写前台(标题/五点/描述/后台搜索词)" if mx=="品牌词-平台" else ("UGC评论QA+广告可打" if mx=="品牌词-竞品" else "UGC评论QA"))))
         kl=kw.lower()
         if is_misspell(kl): status="拼写变体(广告可投·勿写listing)"
         elif is_trademark(kl): status=("⚠️商标在标题/五点·撤(仅描述/ST用for-para措辞)" if (inT or inB) else ("ST合规(for形式)+UGC" if inS else "仅for/compatible措辞+UGC"))
         elif is_comp(kl) or is_ip(kl) or mx in ("品牌词-竞品","IP词"): status="UGC引导(勿直写)"
         elif fr or inS: status="已埋" if fr else "已埋(后台搜索词)"
-        elif mx in ("意图词","品牌词-平台"): status="待埋(补描述)" if qualify_embed(kw,cat,supp,soft,_qa) else "不埋"
+        elif mx in ("意图词","品牌词-平台","礼品词"): status="待埋(补描述)" if qualify_embed(kw,cat,supp,soft,_qa) else "不埋"
         else: status="UGC待引导"
-        t2r.append({"关键词":kw,"站点":site,"矩阵":mx,"埋词渠道":ch,"标题已埋":inT,"五点已埋":inB,"描述已埋":inD,"后台ST已埋":inS,"前台已覆盖":fr,"埋词状态":status})
+        row={"关键词":kw,"站点":site,"矩阵":mx,"埋词渠道":ch,"标题已埋":inT,"五点已埋":inB,"描述已埋":inD,"后台ST已埋":inS,"前台已覆盖":fr,"埋词状态":status}
+        row.update(cihai_t2_fields(f,kw,mx,cat,inT,inB,inD,inS))
+        t2r.append(row)
     return batch(app,t2,t2r)
 
 def im_card(oid,title,md,color="blue"):
@@ -2002,8 +2128,12 @@ def audit14(meta, L, rows):
     for f in rows:
         kw=ext(f.get("关键词"))
         mx=ss(f.get("矩阵"))
-        R.append({"kw":kw,"mx":mx,"vol":float(ext(f.get("月搜索量")) or 0),"ord":float(ext(f.get("已出单单量")) or 0),
-                  "rank":float(ext(f.get("我方自然排名")) or 0),"front":cov(kw,front),"instr":cov(kw,stt),"qual":listing_direct_allowed_matrix(mx) and qualify_embed(kw,cat,supp,soft,_qa)})
+        wt=ss(f.get("词型")) or cihai_word_type(kw,mx,cat)
+        q=ext(f.get("用户问题")) or cihai_user_question(kw,wt,cat)
+        inT=cov(kw,tt); inB=cov(kw,bt); inD=cov(kw,dt); inS=cov(kw,stt); fr=inT or inB or inD
+        R.append({"kw":kw,"mx":mx,"wt":wt,"question":q,"vol":float(ext(f.get("月搜索量")) or 0),"ord":float(ext(f.get("已出单单量")) or 0),
+                  "rank":float(ext(f.get("我方自然排名")) or 0),"t":inT,"b":inB,"d":inD,"instr":inS,"front":fr,
+                  "qa_loc":cihai_cover_location(inT,inB,inD,inS),"qual":listing_direct_allowed_matrix(mx) and qualify_embed(kw,cat,supp,soft,_qa)})
     total=len(R); embedded=sum(1 for r in R if r["front"] or r["instr"])
     rk=[r for r in R if r["rank"]>0]; p1=[r for r in rk if r["rank"]<=16]; p23=[r for r in rk if 16<r["rank"]<=48]; deep=[r for r in rk if r["rank"]>48]
     sens=lambda r: r["mx"] in ("IP词","品牌词-竞品") or is_ip(r["kw"]) or is_comp(r["kw"]) or is_trademark(r["kw"])
@@ -2012,6 +2142,9 @@ def audit14(meta, L, rows):
     miss=agg_roots(sorted([r for r in embeddable if not(r["front"] or r["instr"])],key=lambda r:-(r["vol"]+r["ord"]*5000)))
     missu=sorted([r for r in ugc if not(r["front"] or r["instr"])],key=lambda r:-(r["vol"]+r["ord"]*5000))
     nz=sorted(noise,key=lambda r:-r["vol"])
+    aiq=sorted([r for r in R if cihai_question_like(r["wt"]) and not ss(r["mx"]).startswith("排除") and not sens(r)],key=lambda r:-(r["vol"]+r["ord"]*5000))
+    aiq_missing=[r for r in aiq if not r["front"]]
+    aiq_only_st=[r for r in aiq if r["instr"] and not r["front"]]
     # listing 健康
     avail=listing_availability(L); be=len(L["bullets"])==0; de=not L["desc"].strip(); se=not L["st"].strip(); buy=avail["buy"] is True; sale_unavailable=avail["state"]=="unavailable"; sale_unknown=avail["state"]=="unknown"; config_issue=avail["state"]=="config_issue"
     notext=(not L["title"].strip()) and be and de and se
@@ -2078,6 +2211,9 @@ def audit14(meta, L, rows):
         cover_pct=round(100.0*embedded/max(total,1)),rec_pct=round(100.0*len(rk)/max(total,1)),
         fit=fit,n_embeddable=len(embeddable),n_ugc=len(ugc),
         miss=miss[:20],missu=missu[:12],noise=nz[:15],supp=supp,soft=soft,
+        aiq_total=len(aiq),aiq_covered=len([r for r in aiq if r["front"]]),aiq_pct=round(100.0*len([r for r in aiq if r["front"]])/max(len(aiq),1)),
+        aiq_missing_total=len(aiq_missing),
+        aiq_missing=aiq_missing[:20],aiq_only_st=aiq_only_st[:12],
         nbul=nbul,be=be,de=de,se=se,buy=buy,sale_unavailable=sale_unavailable,sale_unknown=sale_unknown,config_issue=config_issue,listing_availability=avail["state"],availability_label=avail["label"],listing_status_raw=avail["raw"],title_source=L.get("title_source","接口未返回标题"),status_source=L.get("status_source","摘要状态(summaries.status)"),notext=notext,authored=L.get("authored",True),has_record=L.get("has_record",True),
         miss_title=miss_title,has_scene=has_scene,has_pain=has_pain,has_after=has_after,
         st_ip=st_ip,st_mis=st_mis,st_sug=sug,st_sug_bytes=by(sug),ip_lib=ip_lib,
@@ -2155,7 +2291,7 @@ code{{background:#1a1a20;padding:1px 5px;border-radius:3px;color:#cfcfd4;font-si
              f"<tr><th>系统读到的标题</th><td>{esc(L.get('title') or '')}</td></tr>"
              "</table><div class=sub>如果运营后台截图显示在售或标题已更新，但这里不同，以后台截图为准；这类先标为系统需复核，不要求运营先改 Listing。</div></div>")
     # 完备性
-    h.append(f"<div class=box><b>📋 这次审计覆盖了什么</b><br>✅ 已审(数据驱动):埋词覆盖·收录分层·后台搜索词·机型兼容·品牌名·合规·IP联想 ｜ 🖼 需人看图:主图·A+ ｜ 📝 需运营后台看:评价星级·QA数·差评·售价 ｜ ✍ 需运营改写(本站给结构指引,主力产品才出精修稿):标题/五点/描述文案 ｜ ⚪ 没做:AI推荐参考词·毛利<br><span class=sub>词库 {a['total']} 词 ｜ 埋词覆盖 {a['cover_pct']}% ｜ 已收录(有自然排名){a['recorded']} 词</span></div>")
+    h.append(f"<div class=box><b>📋 这次审计覆盖了什么</b><br>✅ 已审(数据驱动):埋词覆盖·收录分层·后台搜索词·机型兼容·品牌名·合规·IP联想·AI/Alexa问句覆盖 ｜ 🖼 需人看图:主图·A+ ｜ 📝 需运营后台看:评价星级·QA数·差评·售价 ｜ ✍ 需运营改写(本站给结构指引,主力产品才出精修稿):标题/五点/描述文案 ｜ ⚪ 没做:毛利<br><span class=sub>词库 {a['total']} 词 ｜ 埋词覆盖 {a['cover_pct']}% ｜ 已收录(有自然排名){a['recorded']} 词 ｜ 问句词覆盖 {a.get('aiq_covered',0)}/{a.get('aiq_total',0)}</span></div>")
     # 头号问题
     banner=[]
     if a.get("config_issue"): banner.append("🟡 配置需先修正 → 先核对店铺编号、店铺里的 SKU、ASIN 和站点，再重新生成报告")
@@ -2206,6 +2342,9 @@ code{{background:#1a1a20;padding:1px 5px;border-radius:3px;color:#cfcfd4;font-si
     elif a["front_comp"]:
         listing_health_text="🟠 标题/五点含竞品品牌 → 建议移走(走 SD 商品定投打竞品)"
         listing_health_state="🟠 可优化"
+    qa_text=("本次词库未识别到明显问句/场景/痛点词；仍需运营后台看 QA 数量和质量" if not a.get("aiq_total") else
+             f"问句/场景/痛点词 {a.get('aiq_total',0)} 个；标题/五点/描述已回答 {a.get('aiq_covered',0)} 个({a.get('aiq_pct',0)}%)；待补 {a.get('aiq_missing_total',0)} 个。QA 数量仍需运营后台看，缺答案的词优先补五点/描述/QA。")
+    qa_state=OP if not a.get("aiq_total") else (CH if not a.get("aiq_missing") else RW)
     diag=[
      ("埋词覆盖",f"{a['embedded']} 个目标词已进文案(覆盖 {a['cover_pct']}%);下方『漏埋补词清单』是剔噪后可直写补的高价值词",CH),
      ("标题关键词顺序",(f"标题缺:<b class=warn>{esc(miss_t)}</b> → 建议结构见下『标题诊断』" if miss_t else "标题已含品牌+核心词+机型,顺序合理"),(RW if miss_t else GN)),
@@ -2219,9 +2358,10 @@ code{{background:#1a1a20;padding:1px 5px;border-radius:3px;color:#cfcfd4;font-si
      ("A+ 图文","需做 A+『问题-解决方案』结构 + 竞品对比表(Rufus 友好)",HU),
      ("售价","本次未拉 mws/listing,售价需运营后台看",OP),
      ("评价/星级","需运营后台看评价数/星级;>4.5★ 亚马逊 AI 导购更愿推",OP),
-     ("买家问答 QA","需运营后台看 QA 够不够 50 条;QA 能『借买家的嘴』提不能写进文案的词",OP),
+     ("买家问答 QA",qa_text,qa_state),
      ("差评","需导差评,把抱怨点改进到五点和图",OP),
-     ("AI推荐参考词/毛利","本次没做,需单独拉","⚪ 本次没做"),
+     ("Alexa/Rufus 问句覆盖",f"系统已按词库识别用户会问什么；只在后台ST出现不算已回答。待补清单见下方『Alexa / QA 问句覆盖』。",CH),
+     ("毛利","本次未拉毛利数据,需单独接财务/领星口径","⚪ 本次没做"),
      ("listing健康+合规",listing_health_text,listing_health_state),
     ]
     h.append("<h2>🩺 14 维诊断</h2><table><tr><th>维度</th><th>诊断</th><th>状态</th></tr>")
@@ -2246,6 +2386,22 @@ code{{background:#1a1a20;padding:1px 5px;border-radius:3px;color:#cfcfd4;font-si
     if a["st_ip"] or a["st_mis"]:
         h.append(f"<div class=box><b class=red>删：</b> {esc(', '.join(list(a['st_ip'])+list(set(a['st_mis']))))}（IP/拼写错词,侵权或低质）</div>")
     h.append(f"<div class=box><span class=new>建议后台搜索词草稿（去噪+补漏埋高价值词，{a['st_sug_bytes']} 字节，≤250）：</span><br><b>{esc(a['st_sug'])}</b><br><br><span class=sub>已去 IP/拼写错/竞品词;补了下方漏埋 Top 词。nintendo 如要保留只用兼容措辞 compatible with/for；运营按本地语言核对通顺度。</span></div>")
+    # Alexa / QA 问句覆盖
+    h.append("<h2>④ Alexa / QA 问句覆盖（用户会怎么问）</h2>")
+    h.append(f"<div class=box><b>覆盖口径：</b>标题/五点/描述里回答到，才算 Alexa/Rufus/QA 有答案；只在后台搜索词出现，只能帮助索引，不能回答用户问题。<br><span class=sub>问句/场景/痛点词 {a.get('aiq_total',0)} 个 ｜ 已回答 {a.get('aiq_covered',0)} 个 ｜ 覆盖率 {a.get('aiq_pct',0)}%</span></div>")
+    if a.get("aiq_missing"):
+        h.append("<table><tr><th>用户问题</th><th>触发关键词</th><th>词型</th><th>当前覆盖</th><th>建议补哪里</th></tr>")
+        for r in a.get("aiq_missing",[])[:15]:
+            if r.get("instr") and not r.get("front"):
+                loc="仅后台ST，不算回答"; action="补五点/描述或 QA 问答，不能只留在后台搜索词"
+            else:
+                loc=r.get("qa_loc") or "未覆盖"; action="优先补五点或描述；能用买家语气的问题放到 QA"
+            h.append(f"<tr><td>{esc(r.get('question') or '')}</td><td class=kw>{esc(r.get('kw') or '')}</td><td>{esc(r.get('wt') or '')}</td><td>{esc(loc)}</td><td>{esc(action)}</td></tr>")
+        h.append("</table>")
+    else:
+        h.append("<div class=box class=grn>当前未发现待补的问句词缺口；仍需运营后台确认 QA 数量、真实买家问法和差评问题。</div>")
+    if a.get("aiq_only_st"):
+        h.append("<div class=box style='border-color:#ffb454;background:#251c12'><b class=warn>只在后台 ST 的问句词</b><br>"+esc(" / ".join(r["kw"] for r in a.get("aiq_only_st",[])[:8]))+"<br><span class=sub>这些词有索引痕迹，但用户看不到答案。建议用自然语言补到五点/描述/QA。</span></div>")
     # 核心重要词 · 全层覆盖(Frankie 铁律)
     h.append("<h2>🎯 核心重要词 · 全层覆盖检查（权重最大化）</h2><div class=sub>🚨 Frankie 铁律:<b>重要核心词必须在 标题 / 五点 / 描述 / 后台搜索词 四层都有</b>,权重才最大化。下表 <span class=red>✗</span> = 该层缺,建议补上(核心词重复出现在各层不算堆词,是有意强化)。</div>")
     h.append("<table><tr><th>核心词</th><th class=num>月搜量</th><th>标题</th><th>五点</th><th>描述</th><th>后台搜索词</th><th>缺哪层 → 补</th></tr>")

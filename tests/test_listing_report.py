@@ -180,5 +180,44 @@ class ListingReportTest(unittest.TestCase):
         self.assertIn("英国", html)
         self.assertIn("德国", html)
         self.assertNotIn("店铺不可售", weekly["status"])
+
+    def test_cihai_enrich_adds_keyword_ocean_fields(self):
+        row = {
+            "关键词": "best switch controller for kids",
+            "矩阵": "意图词",
+            "月搜索量": 1800,
+            "词级": "中词",
+            "已出单单量": 0,
+        }
+        self.app.cihai_enrich(row, "controller")
+
+        self.assertEqual("口语问句", row["词型"])
+        self.assertIn("best switch controller for kids", row["用户问题"])
+        self.assertEqual("词海广告", row["广告角色"])
+        self.assertEqual("待测", row["词海状态"])
+        self.assertIn("词海广告", row["复盘动作"])
+
+    def test_listing_report_adds_alexa_qa_question_gap(self):
+        rows = [
+            {"关键词": "best switch controller for kids", "矩阵": "意图词", "词型": "口语问句", "用户问题": "用户会问：这款手柄适合小孩吗？", "月搜索量": 1800, "已出单单量": 0, "我方自然排名": 0},
+            {"关键词": "wireless controller", "矩阵": "意图词", "词型": "功能词", "月搜索量": 1200, "已出单单量": 0, "我方自然排名": 0},
+        ]
+        listing = self.sample_listing()
+        listing["st"] = "best switch controller for kids wireless controller"
+
+        audit = self.app.audit14(self.sample_meta(), listing, rows)
+        html = self.app.render14(self.sample_meta(), listing, audit)
+
+        self.assertEqual(2, audit["aiq_total"])
+        self.assertEqual(1, audit["aiq_covered"])
+        self.assertEqual(1, len(audit["aiq_missing"]))
+        self.assertIn("Alexa / QA 问句覆盖", html)
+        self.assertIn("仅后台ST，不算回答", html)
+
+    def test_ad_plan_carries_keyword_ocean_role(self):
+        plan = self.app.P("SP-Auto-捡词(CA)", "SP-Auto自动", "自动(4匹配)", "系统自动匹配", "$0.4", "$10", "35%", "P1", "起量挖词")
+
+        self.assertEqual("捡漏广告", plan["广告角色"])
+        self.assertIn("低 bid", plan["词海复盘动作"])
 if __name__ == "__main__":
     unittest.main()

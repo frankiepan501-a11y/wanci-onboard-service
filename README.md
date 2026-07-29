@@ -3,6 +3,17 @@
 密钥全走 env: FEISHU_APP_ID/FEISHU_APP_SECRET/LX_PROXY_TOKEN/ONBOARD_TOKEN。
 
 ## 修复记录
+### 2026-07-29 P0：词海字段并入万词作战台 + Alexa/QA 问句审计
+- 问题：词海打法如果另建一套字段/词库，运营需要维护两份关键词数据，后续 Listing、广告和周复盘会口径漂移；原 14 维报告也只看“词是否埋进文案”，没有单独检查 Alexa / Rufus / QA 这类自然问句是否被回答。
+- 决策：不新建第二套“词海表”。表1继续作为唯一关键词母表，自动新增词根、词型、用户问题、广告角色、词海状态、复盘动作；表2新增 AI问句覆盖位置、QA覆盖状态、词海复盘动作；表3新增广告角色和词海复盘动作。
+- 代码改动：
+  - `ensure_fields()`：只补缺字段，不重写已有字段类型和选项。
+  - `cihai_enrich()`：导词时自动生成词海字段，区分词海广告、漏斗广告、捡漏广告、UGC/竞品广告、否词候选。
+  - `fill_234()` / `refresh_t2()`：Listing 审计表同步写入 Alexa/QA 问句覆盖口径；只在后台搜索词出现不算“已回答”。
+  - `audit14()` / `render14()`：14 维报告新增「Alexa / QA 问句覆盖」板块，并把“AI推荐参考词”从“没做”改为数据驱动审计项。
+- 验证：本地 `C:\tmp\py311-embed\python.exe -m py_compile app.py`；`C:\tmp\py311-embed\python.exe -m unittest discover -s tests`，14 个测试通过；知识库巡检 `scripts/inspect_knowledge.ps1` OK=True。
+- 未做：本地尚未推送部署；历史作战台不会自动批量回填旧行，部署后在导词/填表/复审时补缺字段。
+
 ### 2026-07-21 P1：DE 站误读 UK 店铺 Listing
 - 问题：运营反馈 DE 站两个报告显示“Listing需先处理：店铺不可售”，但亚马逊后台截图显示同一 ASIN 和店铺里的 SKU 实际在售，标题也和报告不一致。
 - 根因：万词总台和申请表里两条 DE 记录填了 UK 店铺编号 `1192`，其中一条店铺里的 SKU 还带了换行。系统按错误店铺编号读取 Listing，读到 UK 店铺旧数据后误判为 Listing 问题。
