@@ -11,8 +11,9 @@
   - `cihai_enrich()`：导词时自动生成词海字段，区分词海广告、漏斗广告、捡漏广告、UGC/竞品广告、否词候选。
   - `fill_234()` / `refresh_t2()`：Listing 审计表同步写入 Alexa/QA 问句覆盖口径；只在后台搜索词出现不算“已回答”。
   - `audit14()` / `render14()`：14 维报告新增「Alexa / QA 问句覆盖」板块，并把“AI推荐参考词”从“没做”改为数据驱动审计项。
-- 验证：本地 `C:\tmp\py311-embed\python.exe -m py_compile app.py`；`C:\tmp\py311-embed\python.exe -m unittest discover -s tests`，14 个测试通过；知识库巡检 `scripts/inspect_knowledge.ps1` OK=True。
-- 未做：本地尚未推送部署；历史作战台不会自动批量回填旧行，部署后在导词/填表/复审时补缺字段。
+- 验证：本地 `C:\tmp\py311-embed\python.exe -m py_compile app.py`；`C:\tmp\py311-embed\python.exe -m unittest discover -s tests`，14 个测试通过；知识库巡检 `scripts/inspect_knowledge.ps1` OK=True。Zeabur 部署 `298ebc70535b2b252731d1411707b3296bfb6e31` 已 RUNNING；线上报告页已出现「Alexa / QA 问句覆盖」板块。
+- 线上字段迁移：已给总台登记的 22 个作战台补齐表1/表2/表3词海字段，只增字段不改旧行内容；复查 `missing=[]`。
+- 未做：历史作战台旧行的词型/用户问题/广告角色内容不批量回填，后续导词、填表或复审时由代码生成/刷新。
 
 ### 2026-07-21 P1：DE 站误读 UK 店铺 Listing
 - 问题：运营反馈 DE 站两个报告显示“Listing需先处理：店铺不可售”，但亚马逊后台截图显示同一 ASIN 和店铺里的 SKU 实际在售，标题也和报告不一致。
