@@ -1092,8 +1092,8 @@ def process(rid):
             T1=tm["表1·关键词词库"];T2=tm["表2·Listing埋词审计"];T3=tm["表3·广告计划建议"];T4=tm["表4·排名收录追踪"];T5=tm["表5·阶段目标与审计"];T6=tm["表6·否定词库"]
         # 3. 导词库(刷新语义:该站点已有词→清空重导,最新报表覆盖;支持运营重拉干净竞品后重新生成。阿坚 2026-06-27)
         ensure_t1_extra(app,T1)
-        had=any(f["fields"].get("站点")==site for f in lall(app,T1))
-        clear(app,T1,lambda f,s=site:f.get("站点")==s); clear(app,T4,lambda f,s=site:f.get("站点")==s)
+        had=any(ss(f["fields"].get("站点"))==site for f in lall(app,T1))
+        clear(app,T1,lambda f,s=site:ss(f.get("站点"))==s); clear(app,T4,lambda f,s=site:ss(f.get("站点"))==s)
         t1d,t4d,skipped=import_keywords(files,site,asin,cat)
         batch(app,T1,t1d); batch(app,T4,t4d) if t4d else 0
         log.append(f"导词库 表1={len(t1d)} 表4={len(t4d)}"+("(清旧重导刷新)" if had else "")+(f" ⚠️跳过{len(skipped)}坏文件:{','.join(skipped)}" if skipped else ""))
@@ -1207,14 +1207,15 @@ def compute_audit(L,rows,cat):
 
 def refresh_t2(app,t1,t2,L,cat,site):
     """只刷表2(Listing埋词审计),保持与最新 listing 文案同步(摘自 fill_234 表2 段)。"""
+    site=ss(site)
     supp=supported_machines(L["title"]+" "+" ".join(L["bullets"])+" "+L["desc"],cat); soft=supports_soft(L["title"]+" "+" ".join(L["bullets"])+" "+L["desc"]+" "+L["st"])
     _qa=listing_attrs(L)
     tt=set(toks(L["title"])); bt=set()
     for b in L["bullets"]: bt|=set(toks(b))
     dt=set(toks(L["desc"])); st=set(toks(L["st"])); front=tt|bt|dt
     def cov(kw,s): k=toks(kw); return bool(k) and all(w in s for w in k)
-    rows=[r["fields"] for r in lall(app,t1) if r["fields"].get("站点")==site]
-    ensure_site(app,t2); ensure_fields(app,t2,T2_CIHAI_FIELDS); clear(app,t2,lambda f:f.get("站点")==site)
+    rows=[r["fields"] for r in lall(app,t1) if ss(r["fields"].get("站点"))==site]
+    ensure_site(app,t2); ensure_fields(app,t2,T2_CIHAI_FIELDS); clear(app,t2,lambda f,s=site:ss(f.get("站点"))==s)
     t2r=[]
     for f in rows:
         kw=ext(f.get("关键词")); mx=ss(f.get("矩阵"))

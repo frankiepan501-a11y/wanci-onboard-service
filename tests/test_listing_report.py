@@ -214,6 +214,49 @@ class ListingReportTest(unittest.TestCase):
         self.assertIn("Alexa / QA 问句覆盖", html)
         self.assertIn("仅后台ST，不算回答", html)
 
+    def test_refresh_t2_normalizes_feishu_site_select(self):
+        app = self.app
+        old_lall = app.lall
+        old_clear = app.clear
+        old_batch = app.batch
+        old_ensure_site = app.ensure_site
+        old_ensure_fields = app.ensure_fields
+        calls = {}
+
+        def fake_lall(base, table):
+            if table == "t1":
+                return [{"fields": {"站点": ["CA"], "关键词": "bluetooth controller", "矩阵": "意图词", "月搜索量": 500}}]
+            return []
+
+        def fake_clear(base, table, pred=None):
+            calls["clear_matched"] = pred({"站点": ["CA"]})
+
+        def fake_batch(base, table, records):
+            calls["records"] = records
+            return len(records)
+
+        try:
+            app.lall = fake_lall
+            app.clear = fake_clear
+            app.batch = fake_batch
+            app.ensure_site = lambda *args, **kwargs: None
+            app.ensure_fields = lambda *args, **kwargs: None
+            written = app.refresh_t2("app", "t1", "t2", self.sample_listing(), "controller", "CA")
+        finally:
+            app.lall = old_lall
+            app.clear = old_clear
+            app.batch = old_batch
+            app.ensure_site = old_ensure_site
+            app.ensure_fields = old_ensure_fields
+
+        self.assertTrue(calls["clear_matched"])
+        self.assertEqual(1, written)
+        row = calls["records"][0]
+        self.assertEqual("CA", row["站点"])
+        self.assertEqual("功能词", row["词型"])
+        self.assertIn("bluetooth controller", row["用户问题"])
+        self.assertIn(row["AI问句覆盖位置"], ("标题", "五点", "描述", "仅后台ST", "未覆盖"))
+
     def test_ad_plan_carries_keyword_ocean_role(self):
         plan = self.app.P("SP-Auto-捡词(CA)", "SP-Auto自动", "自动(4匹配)", "系统自动匹配", "$0.4", "$10", "35%", "P1", "起量挖词")
 
